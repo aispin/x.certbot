@@ -1,21 +1,26 @@
 FROM alpine:latest
 
+# Define build arguments for CLI download URLs and versions
+ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
+ARG TENCENTCLOUD_CLI_VERSION="3.0.1280.1"
+ARG TENCENTCLOUD_CLI_URL="https://github.com/TencentCloud/tencentcloud-cli/archive/refs/tags/${TENCENTCLOUD_CLI_VERSION}.zip"
+
 # Install dependencies
 RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl && \
     apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
 
 # Install aliyun-cli
-RUN wget https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz && \
-    tar xzvf aliyun-cli-linux-latest-amd64.tgz && \
+RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
+    tar xzvf aliyun-cli.tgz && \
     mv aliyun /usr/local/bin && \
-    rm aliyun-cli-linux-latest-amd64.tgz
+    rm aliyun-cli.tgz
 
 # Install Tencent Cloud CLI (optional - used when CLOUD_PROVIDER=tencentcloud)
 RUN mkdir -p /tmp/tencentcloud && \
     cd /tmp/tencentcloud && \
-    wget https://github.com/TencentCloud/tencentcloud-cli/archive/refs/tags/3.0.0.zip && \
-    unzip 3.0.0.zip && \
-    cd tencentcloud-cli-3.0.0 && \
+    wget ${TENCENTCLOUD_CLI_URL} -O tencentcloud-cli.zip && \
+    unzip tencentcloud-cli.zip && \
+    cd tencentcloud-cli-${TENCENTCLOUD_CLI_VERSION} && \
     pip install . && \
     cd / && \
     rm -rf /tmp/tencentcloud
