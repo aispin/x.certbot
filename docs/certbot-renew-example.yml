@@ -1,0 +1,80 @@
+name: Certbot Certificate Renewal
+
+on:
+  schedule:
+    - cron: '0 0 * * 1,4'  # 每周一和周四凌晨执行
+  workflow_dispatch:  # 允许手动触发
+  push:
+    tags:
+      - 'v*.*.*'  # 发布新版本时触发
+
+jobs:
+  renew-certificates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史以便获取标签
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create certificates directory
+        run: mkdir -p ./certs
+
+      - name: Create .env file
+        run: |
+          cat > .env <<EOL
+          ALIYUN_REGION=${{ secrets.ALIYUN_REGION }}
+          ALIYUN_ACCESS_KEY_ID=${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+          ALIYUN_ACCESS_KEY_SECRET=${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+          DOMAINS=${{ secrets.DOMAINS }}
+          EMAIL=${{ secrets.EMAIL }}
+          DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
+          CHALLENGE_TYPE=${CHALLENGE_TYPE:-dns}
+          CLOUD_PROVIDER=${CLOUD_PROVIDER:-aliyun}
+          EOL
+
+      - name: Run Certbot container
+        run: |
+          docker run --rm \
+            -v $(pwd)/.env:/.env \
+            -v $(pwd)/certs:/etc/letsencrypt/certs \
+            aiblaze/x.certbot:latest
+
+      - name: Deploy certificates to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "./certs/*"
+          target: ${{ secrets.CERT_DESTINATION_PATH }}
+          strip_components: 1
+          overwrite: true
+
+      - name: Restart services
+        uses: appleboy/ssh-action@v1.2.1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            echo "证书已更新，正在重启服务..."
+            ${{ secrets.RESTART_COMMAND || 'systemctl restart nginx' }}
+            echo "服务已重启"
+
+      - name: Notify on success
+        if: ${{ success() && secrets.WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{"text":"✅ 证书已成功更新并部署到服务器"}' \
+            ${{ secrets.WEBHOOK_URL }}
+
+      - name: Notify on failure
+        if: ${{ failure() && secrets.WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{"text":"❌ 证书更新失败，请检查日志"}' \
+            ${{ secrets.WEBHOOK_URL }} 

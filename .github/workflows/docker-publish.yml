@@ -1,0 +1,82 @@
+name: Docker Image CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*.*.*'  # 匹配版本标签，如 v1.0.0, v1.2.3 等
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: PROD  # 指定使用PROD环境
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 获取完整历史以便正确提取版本信息
+    
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ vars.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Login to Aliyun Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.ALIYUN_CR_URL }}
+        username: ${{ secrets.ALIYUN_CR_USERNAME }}
+        password: ${{ secrets.ALIYUN_CR_PASSWORD }}
+    
+    - name: Extract version
+      id: version
+      run: |
+        # 如果是标签触发，则使用标签作为版本号
+        if [[ $GITHUB_REF == refs/tags/v* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        else
+          # 如果不是标签触发，则使用最近的标签加上提交哈希
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          LATEST_VERSION=${LATEST_TAG#v}
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          VERSION="${LATEST_VERSION}-dev.${COMMIT_HASH}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        fi
+        echo "Version: $VERSION"
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ vars.DOCKERHUB_USERNAME }}/x.certbot
+          ${{ secrets.ALIYUN_CR_URL }}/${{ vars.ALIYUN_CR_NAMESPACE }}/x.certbot
+        tags: |
+          type=raw,value=latest
+          type=semver,pattern={{version}},value=${{ env.VERSION }}
+          type=sha,format=short
+    
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ env.VERSION }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max 
