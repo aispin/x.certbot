@@ -13,9 +13,15 @@ RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
     mv aliyun /usr/local/bin && \
     rm aliyun-cli.tgz
 
-# Install Tencent Cloud CLI using pip (recommended method)
-RUN pip3 install --upgrade pip && \
-    pip3 install tccli
+# Install Tencent Cloud CLI according to official documentation
+# Reference: https://github.com/TencentCloud/tencentcloud-cli/blob/master/README.md
+RUN python3 -m pip install --upgrade pip && \
+    # First uninstall any existing installations to avoid conflicts
+    python3 -m pip uninstall -y tccli jmespath || true && \
+    # Install tccli
+    python3 -m pip install tccli && \
+    # Verify installation
+    tccli --version
 
 # Create directories
 RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/plugins/http
@@ -56,6 +62,7 @@ ENV ALIYUN_ACCESS_KEY_ID=""
 ENV ALIYUN_ACCESS_KEY_SECRET=""
 ENV TENCENTCLOUD_SECRET_ID=""
 ENV TENCENTCLOUD_SECRET_KEY=""
+ENV TENCENTCLOUD_REGION="ap-guangzhou"
 # HTTP challenge configuration
 ENV WEBROOT_PATH="/var/www/html"
 # DNS configuration

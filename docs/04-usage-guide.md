@@ -503,6 +503,9 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 |----------|------|-------|------|
 | TENCENTCLOUD_SECRET_ID | 是 | - | 腾讯云 Secret ID |
 | TENCENTCLOUD_SECRET_KEY | 是 | - | 腾讯云 Secret Key |
+| TENCENTCLOUD_REGION | 否 | ap-guangzhou | 腾讯云区域，如 ap-guangzhou, ap-hongkong 等 |
+
+> **注意**：X Certbot 会自动配置腾讯云命令行工具 (tccli)，无需手动配置。系统会使用上述环境变量设置 tccli 的 secretId、secretKey、region 和 output 格式。
 
 ### 8.5 HTTP 验证配置 (当 CHALLENGE_TYPE=http 时)
 

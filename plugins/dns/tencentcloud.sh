@@ -51,6 +51,15 @@ fi
 # Export Tencent Cloud credentials for tccli
 export TENCENTCLOUD_SECRET_ID
 export TENCENTCLOUD_SECRET_KEY
+export TENCENTCLOUD_REGION=${TENCENTCLOUD_REGION:-"ap-guangzhou"}
+
+# Configure tccli if not already configured
+# This is a non-interactive way to configure tccli
+echo "Configuring Tencent Cloud CLI..."
+tccli configure set secretId "$TENCENTCLOUD_SECRET_ID" 2>/dev/null
+tccli configure set secretKey "$TENCENTCLOUD_SECRET_KEY" 2>/dev/null
+tccli configure set region "$TENCENTCLOUD_REGION" 2>/dev/null
+tccli configure set output "json" 2>/dev/null
 
 # Function to extract the main domain from a subdomain
 get_main_domain() {
@@ -99,11 +108,13 @@ get_domain_id() {
     local domain=$1
     
     # Use tccli to get domain information
+    echo "Getting domain information for $domain..."
     result=$(tccli dnspod DescribeDomain --Domain "$domain" 2>/dev/null)
     
     # Check if command was successful
     if [ $? -ne 0 ]; then
         echo "Error: Failed to get domain information for $domain"
+        echo "Command output: $result"
         return 1
     fi
     
@@ -112,9 +123,11 @@ get_domain_id() {
     
     if [ -z "$domain_id" ] || [ "$domain_id" == "null" ]; then
         echo "Error: Could not retrieve domain ID for $domain"
+        echo "API response: $result"
         return 1
     fi
     
+    echo "Domain ID for $domain: $domain_id"
     echo "$domain_id"
 }
 
@@ -130,11 +143,13 @@ if [ "$ACTION" == "add" ]; then
     fi
     
     # Add TXT record using tccli
+    echo "Creating TXT record for $FULL_RECORD_NAME..."
     result=$(tccli dnspod CreateRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --SubDomain "$FULL_RECORD_NAME" --RecordType "TXT" --RecordLine "默认" --Value "$VALUE" --TTL 600 2>/dev/null)
     
     # Check if command was successful
     if [ $? -ne 0 ]; then
         echo "Error: Failed to add TXT record"
+        echo "Command output: $result"
         exit 1
     fi
     
@@ -176,6 +191,7 @@ elif [ "$ACTION" == "delete" ]; then
         # Check if command was successful
         if [ $? -ne 0 ]; then
             echo "Error: Failed to list DNS records"
+            echo "Command output: $result"
             exit 1
         fi
         
@@ -186,11 +202,12 @@ elif [ "$ACTION" == "delete" ]; then
     if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         # Delete the record using tccli
         echo "Deleting record ID: $record_id"
-        tccli dnspod DeleteRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --RecordId "$record_id" >/dev/null 2>&1
+        delete_result=$(tccli dnspod DeleteRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --RecordId "$record_id" 2>/dev/null)
         
         # Check if command was successful
         if [ $? -ne 0 ]; then
             echo "Error: Failed to delete TXT record"
+            echo "Command output: $delete_result"
             exit 1
         fi
         

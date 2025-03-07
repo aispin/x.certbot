@@ -94,9 +94,28 @@ configure_provider() {
             exit 1
         fi
         
-        # Environment variables will be used by the Tencent Cloud plugin
+        # Set default region if not provided
+        TENCENTCLOUD_REGION=${TENCENTCLOUD_REGION:-"ap-guangzhou"}
+        
+        # Export environment variables for Tencent Cloud CLI and SDK
         export TENCENTCLOUD_SECRET_ID=$TENCENTCLOUD_SECRET_ID
         export TENCENTCLOUD_SECRET_KEY=$TENCENTCLOUD_SECRET_KEY
+        export TENCENTCLOUD_REGION=$TENCENTCLOUD_REGION
+        
+        # Configure Tencent Cloud CLI non-interactively
+        echo "Configuring Tencent Cloud CLI..."
+        tccli configure set secretId "$TENCENTCLOUD_SECRET_ID" 2>/dev/null
+        tccli configure set secretKey "$TENCENTCLOUD_SECRET_KEY" 2>/dev/null
+        tccli configure set region "$TENCENTCLOUD_REGION" 2>/dev/null
+        tccli configure set output "json" 2>/dev/null
+        
+        # Verify configuration
+        echo "Verifying Tencent Cloud CLI configuration..."
+        if ! tccli configure list >/dev/null 2>&1; then
+            echo "Warning: Failed to verify Tencent Cloud CLI configuration"
+        else
+            echo "Tencent Cloud CLI configured successfully"
+        fi
     fi
     
     # Additional providers can be added here
