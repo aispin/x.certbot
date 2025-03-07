@@ -3,6 +3,14 @@
 # This script is used by certbot for DNS-01 challenge with Tencent Cloud DNS
 # It can be used as both auth and cleanup hook
 
+# ================================
+# 腾讯云 DNS 插件
+# 参考文档：
+# 命令行工具：https://github.com/TencentCloud/tencentcloud-cli
+# 创建 DNS 记录：https://cloud.tencent.com/document/product/1427/56180
+# 删除 DNS 记录：https://cloud.tencent.com/document/product/1427/56168
+# ================================
+
 # Activate the virtual environment
 source /opt/venv/bin/activate
 
@@ -39,6 +47,10 @@ if [ -z "$TENCENTCLOUD_SECRET_ID" ] || [ -z "$TENCENTCLOUD_SECRET_KEY" ]; then
     echo "Error: TENCENTCLOUD_SECRET_ID and TENCENTCLOUD_SECRET_KEY environment variables must be set."
     exit 1
 fi
+
+# Export Tencent Cloud credentials for tccli
+export TENCENTCLOUD_SECRET_ID
+export TENCENTCLOUD_SECRET_KEY
 
 # Function to extract the main domain from a subdomain
 get_main_domain() {
@@ -82,119 +94,112 @@ echo "Record: $FULL_RECORD_NAME"
 echo "Value: $VALUE"
 echo "Action: $ACTION"
 
-# Get domain ID
+# Function to get domain ID
 get_domain_id() {
     local domain=$1
-    local timestamp=$(date +%s)
-    local nonce=$RANDOM
-    local endpoint="dnspod.tencentcloudapi.com"
-    local method="POST"
-    local path="/"
-    local req_body="{\"Domain\":\"$domain\"}"
     
-    # Create payload for signing
-    local payload="DescribeDomainRequest=$req_body"
+    # Use tccli to get domain information
+    result=$(tccli dnspod DescribeDomain --Domain "$domain" 2>/dev/null)
     
-    # Use tencent cloud CLI or API library to get domain ID
-    # For this example, we'll use curl with the Tencent Cloud API
-    result=$(curl -s -X POST "https://$endpoint" \
-        -H "Authorization: TC3-HMAC-SHA256 Credential=$TENCENTCLOUD_SECRET_ID/$timestamp, SignedHeaders=content-type;host, Signature=xxx" \
-        -H "Content-Type: application/json" \
-        -H "Host: $endpoint" \
-        -d "{\"Domain\":\"$domain\"}")
+    # Check if command was successful
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to get domain information for $domain"
+        return 1
+    fi
     
-    # Parse result to get domain ID
-    domain_id=$(echo "$result" | jq -r '.Response.DomainInfo.Id')
-    echo $domain_id
+    # Extract domain ID
+    domain_id=$(echo "$result" | jq -r '.DomainInfo.Id')
+    
+    if [ -z "$domain_id" ] || [ "$domain_id" == "null" ]; then
+        echo "Error: Could not retrieve domain ID for $domain"
+        return 1
+    fi
+    
+    echo "$domain_id"
 }
 
 # Perform the DNS operation
 if [ "$ACTION" == "add" ]; then
     # Add DNS record
-    echo "Adding DNS record using Tencent Cloud API..."
+    echo "Adding DNS TXT record using Tencent Cloud CLI..."
     
     # Get domain ID
     domain_id=$(get_domain_id "$MAIN_DOMAIN")
-    if [ -z "$domain_id" ] || [ "$domain_id" == "null" ]; then
-        echo "Error: Could not retrieve domain ID for $MAIN_DOMAIN"
+    if [ $? -ne 0 ]; then
         exit 1
     fi
     
-    # Add TXT record
-    result=$(curl -s -X POST "https://dnspod.tencentcloudapi.com" \
-        -H "Authorization: TC3-HMAC-SHA256 Credential=$TENCENTCLOUD_SECRET_ID/$(date +%Y-%m-%d)/dnspod/tc3_request, SignedHeaders=content-type;host, Signature=xxx" \
-        -H "Content-Type: application/json" \
-        -H "Host: dnspod.tencentcloudapi.com" \
-        -d "{
-            \"Domain\": \"$MAIN_DOMAIN\",
-            \"DomainId\": $domain_id,
-            \"SubDomain\": \"$FULL_RECORD_NAME\",
-            \"RecordType\": \"TXT\",
-            \"RecordLine\": \"默认\",
-            \"Value\": \"$VALUE\",
-            \"TTL\": 600
-        }")
+    # Add TXT record using tccli
+    result=$(tccli dnspod CreateRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --SubDomain "$FULL_RECORD_NAME" --RecordType "TXT" --RecordLine "默认" --Value "$VALUE" --TTL 600 2>/dev/null)
     
-    # Check for errors in response
-    error=$(echo "$result" | jq -r '.Response.Error')
-    if [ "$error" != "null" ]; then
-        echo "Error adding DNS record: $error"
+    # Check if command was successful
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to add TXT record"
         exit 1
     fi
     
-    echo "TXT record added successfully"
+    # Extract record ID for reference
+    record_id=$(echo "$result" | jq -r '.RecordId')
+    echo "TXT record added successfully with ID: $record_id"
+    
+    # Store record ID for cleanup (optional)
+    if [ -n "$CERTBOT_TOKEN" ]; then
+        mkdir -p /tmp/CERTBOT_$CERTBOT_TOKEN
+        echo "$record_id" > /tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID
+    fi
     
     # Wait for DNS propagation
     echo "Waiting for DNS propagation (${DNS_PROPAGATION_SECONDS} seconds)..."
     sleep $DNS_PROPAGATION_SECONDS
     
 elif [ "$ACTION" == "delete" ]; then
-    # Find the record ID
-    echo "Finding record ID using Tencent Cloud API..."
+    echo "Deleting DNS TXT record using Tencent Cloud CLI..."
     
     # Get domain ID
     domain_id=$(get_domain_id "$MAIN_DOMAIN")
-    if [ -z "$domain_id" ] || [ "$domain_id" == "null" ]; then
-        echo "Error: Could not retrieve domain ID for $MAIN_DOMAIN"
+    if [ $? -ne 0 ]; then
         exit 1
     fi
     
-    # Get record list
-    result=$(curl -s -X POST "https://dnspod.tencentcloudapi.com" \
-        -H "Authorization: TC3-HMAC-SHA256 Credential=$TENCENTCLOUD_SECRET_ID/$(date +%Y-%m-%d)/dnspod/tc3_request, SignedHeaders=content-type;host, Signature=xxx" \
-        -H "Content-Type: application/json" \
-        -H "Host: dnspod.tencentcloudapi.com" \
-        -d "{
-            \"Domain\": \"$MAIN_DOMAIN\",
-            \"DomainId\": $domain_id,
-            \"Subdomain\": \"$FULL_RECORD_NAME\",
-            \"RecordType\": \"TXT\"
-        }")
+    # Try to get record ID from temp file if available
+    record_id=""
+    if [ -n "$CERTBOT_TOKEN" ] && [ -f "/tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID" ]; then
+        record_id=$(cat "/tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID")
+        echo "Found stored record ID: $record_id"
+    fi
     
-    # Parse result to get record ID
-    record_id=$(echo "$result" | jq -r ".Response.RecordList[] | select(.Value==\"$VALUE\") | .RecordId")
+    if [ -z "$record_id" ]; then
+        # Find the record ID by listing records and filtering
+        echo "Searching for TXT record..."
+        result=$(tccli dnspod DescribeRecordList --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --Subdomain "$FULL_RECORD_NAME" --RecordType "TXT" 2>/dev/null)
+        
+        # Check if command was successful
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to list DNS records"
+            exit 1
+        fi
+        
+        # Find record with matching value
+        record_id=$(echo "$result" | jq -r ".RecordList[] | select(.Value==\"$VALUE\") | .RecordId")
+    fi
     
     if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
-        # Delete the record
+        # Delete the record using tccli
         echo "Deleting record ID: $record_id"
-        delete_result=$(curl -s -X POST "https://dnspod.tencentcloudapi.com" \
-            -H "Authorization: TC3-HMAC-SHA256 Credential=$TENCENTCLOUD_SECRET_ID/$(date +%Y-%m-%d)/dnspod/tc3_request, SignedHeaders=content-type;host, Signature=xxx" \
-            -H "Content-Type: application/json" \
-            -H "Host: dnspod.tencentcloudapi.com" \
-            -d "{
-                \"Domain\": \"$MAIN_DOMAIN\",
-                \"DomainId\": $domain_id,
-                \"RecordId\": $record_id
-            }")
+        tccli dnspod DeleteRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --RecordId "$record_id" >/dev/null 2>&1
         
-        # Check for errors in response
-        error=$(echo "$delete_result" | jq -r '.Response.Error')
-        if [ "$error" != "null" ]; then
-            echo "Error deleting DNS record: $error"
+        # Check if command was successful
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to delete TXT record"
             exit 1
         fi
         
         echo "TXT record deleted successfully"
+        
+        # Clean up temp file if it exists
+        if [ -n "$CERTBOT_TOKEN" ] && [ -d "/tmp/CERTBOT_$CERTBOT_TOKEN" ]; then
+            rm -rf "/tmp/CERTBOT_$CERTBOT_TOKEN"
+        fi
     else
         echo "Record not found, nothing to delete"
     fi

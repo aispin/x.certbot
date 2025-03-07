@@ -1,9 +1,7 @@
 FROM alpine:latest
 
-# Define build arguments for CLI download URLs and versions
+# Define build arguments for CLI download URLs
 ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
-ARG TENCENTCLOUD_CLI_VERSION="3.0.1280.1"
-ARG TENCENTCLOUD_CLI_URL="https://github.com/TencentCloud/tencentcloud-cli/archive/refs/tags/${TENCENTCLOUD_CLI_VERSION}.zip"
 
 # Install dependencies
 RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl && \
@@ -15,15 +13,9 @@ RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
     mv aliyun /usr/local/bin && \
     rm aliyun-cli.tgz
 
-# Install Tencent Cloud CLI (optional - used when CLOUD_PROVIDER=tencentcloud)
-RUN mkdir -p /tmp/tencentcloud && \
-    cd /tmp/tencentcloud && \
-    wget ${TENCENTCLOUD_CLI_URL} -O tencentcloud-cli.zip && \
-    unzip tencentcloud-cli.zip && \
-    cd tencentcloud-cli-${TENCENTCLOUD_CLI_VERSION} && \
-    pip install . && \
-    cd / && \
-    rm -rf /tmp/tencentcloud
+# Install Tencent Cloud CLI using pip (recommended method)
+RUN pip3 install --upgrade pip && \
+    pip3 install tccli
 
 # Create directories
 RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/plugins/http
