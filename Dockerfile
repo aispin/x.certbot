@@ -13,18 +13,6 @@ RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
     mv aliyun /usr/local/bin && \
     rm aliyun-cli.tgz
 
-# Install Tencent Cloud CLI in a virtual environment
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install virtualenv && \
-    python3 -m virtualenv /opt/tccli-venv && \
-    . /opt/tccli-venv/bin/activate && \
-    pip install tccli && \
-    tccli --version && \
-    deactivate
-
-# Add tccli to PATH
-ENV PATH="/opt/tccli-venv/bin:$PATH"
-
 # Create directories
 RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/plugins/http
 
@@ -39,13 +27,12 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/scripts/deploy-hook.sh 
     chmod +x /usr/local/bin/plugins/dns/*.sh /usr/local/bin/plugins/http/*.sh
 
 # Create virtual environment for Python packages
-RUN python3 -m pip install virtualenv && \
-    python3 -m virtualenv /opt/venv
+RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies in virtual environment
 RUN pip install --upgrade pip && \
-    pip install aliyun-python-sdk-core aliyun-python-sdk-alidns tencentcloud-sdk-python
+    pip install aliyun-python-sdk-core aliyun-python-sdk-alidns tccli
 
 # Create HTTP challenge webroot directory
 RUN mkdir -p /var/www/html/.well-known/acme-challenge && \

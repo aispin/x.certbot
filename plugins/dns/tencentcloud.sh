@@ -14,9 +14,6 @@
 # Activate the virtual environment
 source /opt/venv/bin/activate
 
-# Ensure tccli from virtual environment is used
-export PATH="/opt/tccli-venv/bin:$PATH"
-
 # Set default values
 DOMAIN=""
 RECORD="_acme-challenge"
