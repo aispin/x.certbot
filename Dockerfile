@@ -4,7 +4,7 @@ FROM alpine:latest
 ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
 
 # Install dependencies
-RUN apk --no-cache add wget tar sudo certbot bash python3 python3-venv py3-pip jq curl openssl && \
+RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl && \
     apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
 
 # Install aliyun-cli
@@ -14,9 +14,10 @@ RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
     rm aliyun-cli.tgz
 
 # Install Tencent Cloud CLI in a virtual environment
-RUN python3 -m venv /opt/tccli-venv && \
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install virtualenv && \
+    python3 -m virtualenv /opt/tccli-venv && \
     . /opt/tccli-venv/bin/activate && \
-    pip install --upgrade pip && \
     pip install tccli && \
     tccli --version && \
     deactivate
@@ -38,7 +39,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/scripts/deploy-hook.sh 
     chmod +x /usr/local/bin/plugins/dns/*.sh /usr/local/bin/plugins/http/*.sh
 
 # Create virtual environment for Python packages
-RUN python3 -m venv /opt/venv
+RUN python3 -m pip install virtualenv && \
+    python3 -m virtualenv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies in virtual environment
