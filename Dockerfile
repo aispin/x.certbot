@@ -4,7 +4,7 @@ FROM alpine:latest
 ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
 
 # Install dependencies
-RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl && \
+RUN apk --no-cache add wget tar sudo certbot bash python3 python3-venv py3-pip jq curl openssl && \
     apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
 
 # Install aliyun-cli
@@ -13,15 +13,16 @@ RUN wget ${ALIYUN_CLI_URL} -O aliyun-cli.tgz && \
     mv aliyun /usr/local/bin && \
     rm aliyun-cli.tgz
 
-# Install Tencent Cloud CLI according to official documentation
-# Reference: https://github.com/TencentCloud/tencentcloud-cli/blob/master/README.md
-RUN python3 -m pip install --upgrade pip && \
-    # First uninstall any existing installations to avoid conflicts
-    python3 -m pip uninstall -y tccli jmespath || true && \
-    # Install tccli
-    python3 -m pip install tccli && \
-    # Verify installation
-    tccli --version
+# Install Tencent Cloud CLI in a virtual environment
+RUN python3 -m venv /opt/tccli-venv && \
+    . /opt/tccli-venv/bin/activate && \
+    pip install --upgrade pip && \
+    pip install tccli && \
+    tccli --version && \
+    deactivate
+
+# Add tccli to PATH
+ENV PATH="/opt/tccli-venv/bin:$PATH"
 
 # Create directories
 RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/plugins/http

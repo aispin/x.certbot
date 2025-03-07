@@ -102,6 +102,10 @@ configure_provider() {
         export TENCENTCLOUD_SECRET_KEY=$TENCENTCLOUD_SECRET_KEY
         export TENCENTCLOUD_REGION=$TENCENTCLOUD_REGION
         
+        # Ensure tccli from virtual environment is used
+        echo "Using tccli from virtual environment at /opt/tccli-venv"
+        export PATH="/opt/tccli-venv/bin:$PATH"
+        
         # Configure Tencent Cloud CLI non-interactively
         echo "Configuring Tencent Cloud CLI..."
         tccli configure set secretId "$TENCENTCLOUD_SECRET_ID" 2>/dev/null
