@@ -286,22 +286,29 @@ docker-compose up -d
 
 2. **配置 GitHub Secrets**：
   在仓库的 Settings > Secrets and variables > Actions 中添加以下 Secrets：
+
+  **必要配置**：
   - `ALIYUN_REGION`: 阿里云区域（如 cn-hangzhou）
   - `ALIYUN_ACCESS_KEY_ID`: 阿里云访问密钥 ID
   - `ALIYUN_ACCESS_KEY_SECRET`: 阿里云访问密钥 Secret
   - `DOMAINS`: 域名列表，逗号分隔（如 example.com,sub.example.com）
   - `EMAIL`: 证书所有者的电子邮件地址
-  - `SERVER_HOST`: 目标服务器 IP 或域名
-  - `SERVER_USERNAME`: SSH 用户名
-  - `SERVER_SSH_KEY`: SSH 私钥（完整内容，包括开头和结尾行）
-  - `CERT_DESTINATION_PATH`: 证书目标路径（如 /etc/nginx/certs）
-  - `RESTART_COMMAND`（可选）: 证书部署后运行的命令（默认为 systemctl restart nginx）
-  - `WEBHOOK_URL`（可选）: 用于通知的 Webhook URL
+  - `SERVERS`: 服务器列表，每行一个，格式为 `user@host`（例如：`root@example.com`）
+  - `SSH_PRIVATE_KEY`: SSH 私钥（完整内容，包括开头和结尾行）
+
+  **可选配置**：
+  - `CERT_DIR`: 证书目标路径（默认为 `/etc/letsencrypt/certs`）
+  - `CERT_UPDATED_HOOK_CMD`: 证书部署后运行的命令（如 `systemctl restart nginx`）
+  - `WEBHOOK_URL`: 用于通知的 Webhook URL
+  - `DNS_PROPAGATION_SECONDS`: DNS 记录传播等待时间（默认 60 秒）
+  - `CHALLENGE_TYPE`: 验证类型（默认 `dns`，也可设置为 `http`）
+  - `CLOUD_PROVIDER`: 云服务提供商（默认 `aliyun`，也可设置为 `tencentcloud`）
 
 3. **确保目标服务器可访问**：
   - 确保 GitHub Actions 可以通过 SSH 连接到您的服务器
-  - 确保 `SERVER_USERNAME` 用户有权限写入 `CERT_DESTINATION_PATH` 目录
-  - 如果使用 `RESTART_COMMAND`，确保该用户有权限执行该命令
+  - 确保服务器的 `~/.ssh/authorized_keys` 文件中包含相应的公钥
+  - 确保 SSH 用户有权限写入 `CERT_DIR` 目录
+  - 如果使用 `CERT_UPDATED_HOOK_CMD`，确保该用户有权限执行该命令
 
 ### 4.2 创建工作流文件
 
@@ -315,8 +322,25 @@ docker-compose up -d
 
     创建 `.github/workflows/certbot-renewal.yml` 文件，内容参考 [certbot-renew-example.yml](./certbot-renew-example.yml)
 
+### 4.3 多服务器部署设置
 
-### 4.3 使用工作流
+X Certbot 支持将证书部署到多台服务器，配置方法如下：
+
+1. **配置 SERVERS 变量**：
+   ```
+   user1@server1.example.com
+   user2@server2.example.com
+   root@server3.example.com
+   ```
+
+2. **配置一次 SSH_PRIVATE_KEY**：
+   一个 SSH 私钥可用于访问多台服务器，前提是这些服务器都添加了对应的公钥到其 `authorized_keys` 文件中。
+
+3. **设置全局证书目录和更新钩子**：
+   - `CERT_DIR`: 所有服务器上证书的存放路径
+   - `CERT_UPDATED_HOOK_CMD`: 证书更新后在每台服务器上执行的命令
+
+### 4.4 使用工作流
 
 1. **提交并推送工作流文件**：
 
@@ -335,7 +359,7 @@ docker-compose up -d
   - 在 GitHub 仓库的 Actions 标签页查看执行日志
   - 检查目标服务器上的证书文件是否已更新
 
-### 4.4 工作流执行流程
+### 4.5 工作流执行流程
 
 1. 工作流会在以下情况触发：
   - 按计划（每周一和周四凌晨）自动执行
@@ -347,9 +371,34 @@ docker-compose up -d
   - 设置 Docker 环境
   - 创建 .env 文件和证书目录
   - 运行 X Certbot 容器获取/更新证书
-  - 将证书部署到目标服务器
-  - 重启目标服务器上的服务
+  - 解析服务器配置列表
+  - 将证书部署到所有目标服务器
+  - 在每台服务器上执行证书更新后的钩子命令（如果配置了）
   - 发送成功/失败通知（如果配置了 WEBHOOK_URL）
+
+### 4.6 SSH 密钥管理最佳实践
+
+1. **创建专用部署密钥**：
+   ```bash
+   ssh-keygen -t rsa -b 4096 -C "certbot@example.com" -f deploy_key
+   ```
+   不要为这个密钥设置密码。
+
+2. **配置目标服务器**：
+   在每台目标服务器上添加公钥：
+   ```bash
+   cat deploy_key.pub >> ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+3. **限制密钥权限**：
+   推荐在 `authorized_keys` 中限制这个密钥的使用：
+   ```
+   command="rsync --server -logDtpre.iLsfx . /etc/letsencrypt/certs/",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-rsa AAAA...
+   ```
+
+4. **定期轮换密钥**：
+   为了安全起见，建议每 3-6 个月轮换一次部署密钥。
 
 ## 5. 常见问题与故障排除
 
@@ -386,9 +435,21 @@ docker-compose up -d
 **问题**：GitHub Actions 无法连接到目标服务器。
 
 **解决方案**：
-- 检查 SSH 密钥是否正确配置
-- 确认服务器防火墙设置
-- 验证 SERVER_HOST 和 SERVER_USERNAME 是否正确
+- 检查 `SSH_PRIVATE_KEY` 是否正确配置（包含完整内容，包括开头的 `-----BEGIN OPENSSH PRIVATE KEY-----` 和结尾行）
+- 确认目标服务器的 `~/.ssh/authorized_keys` 文件是否正确包含对应的公钥
+- 验证 `SERVERS` 变量中的格式是否正确（`user@host`，每行一个服务器）
+- 检查目标服务器的 SSH 设置是否允许密钥认证
+- 如果某台服务器连接失败，工作流会继续尝试其他服务器，检查日志以确定哪台服务器有问题
+
+### 5.4.1 多服务器部署问题
+
+**问题**：只有部分服务器成功部署证书。
+
+**解决方案**：
+- 检查工作流日志，找出失败的服务器和具体错误
+- 确认所有服务器都正确配置了相同的公钥
+- 验证每台服务器的用户是否有权限创建/写入 `CERT_DIR` 目录
+- 对于执行 `CERT_UPDATED_HOOK_CMD` 失败的服务器，确认用户是否有足够权限执行该命令
 
 ### 5.5 如何在 CI/CD 管道中使用？
 

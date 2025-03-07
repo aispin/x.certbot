@@ -24,19 +24,6 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ vars.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-    
-    - name: Login to Aliyun Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.ALIYUN_CR_URL }}
-        username: ${{ secrets.ALIYUN_CR_USERNAME }}
-        password: ${{ secrets.ALIYUN_CR_PASSWORD }}
-    
     - name: Extract version
       id: version
       run: |
@@ -53,29 +40,67 @@ jobs:
         fi
         echo "Version: $VERSION"
     
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: |
-          ${{ vars.DOCKERHUB_USERNAME }}/x.certbot
-          ${{ secrets.ALIYUN_CR_URL }}/${{ vars.ALIYUN_CR_NAMESPACE }}/x.certbot
-        tags: |
-          # 始终使用 latest 标签
-          type=raw,value=latest
-          # 只在发布标签时生成版本标签
-          type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ github.ref_type == 'tag' }}
-          # 不再生成 sha 标签
+    - name: Extract Tags
+      id: tags
+      run: |
+        # 获取仓库信息
+        DOCKER_HUB_REPO="${{ vars.DOCKERHUB_USERNAME }}/x.certbot"
+        ALIYUN_REPO="${{ secrets.ALIYUN_CR_URL }}/${{ vars.ALIYUN_CR_NAMESPACE }}/x.certbot"
+        
+        # 构建基本标签 (always include latest)
+        ALIYUN_TAGS="$ALIYUN_REPO:latest"
+        DOCKER_HUB_TAGS="$DOCKER_HUB_REPO:latest"
+        
+        # 如果是版本发布，添加版本标签
+        if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          ALIYUN_TAGS="$ALIYUN_TAGS,$ALIYUN_REPO:${{ env.VERSION }}"
+          DOCKER_HUB_TAGS="$DOCKER_HUB_TAGS,$DOCKER_HUB_REPO:${{ env.VERSION }}"
+          echo "构建版本标签: ${{ env.VERSION }}"
+        fi
+        
+        # 输出标签到环境变量和输出
+        echo "ALIYUN_TAGS=$ALIYUN_TAGS" >> $GITHUB_ENV
+        echo "DOCKER_HUB_TAGS=$DOCKER_HUB_TAGS" >> $GITHUB_ENV
+        echo "aliyun_tags=$ALIYUN_TAGS" >> $GITHUB_OUTPUT
+        echo "docker_hub_tags=$DOCKER_HUB_TAGS" >> $GITHUB_OUTPUT
+        
+        echo "阿里云标签: $ALIYUN_TAGS"
+        echo "Docker Hub标签: $DOCKER_HUB_TAGS"
     
-    - name: Build and push
+    # 第一步：登录并推送到阿里云容器仓库
+    - name: Login to Aliyun Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.ALIYUN_CR_URL }}
+        username: ${{ secrets.ALIYUN_CR_USERNAME }}
+        password: ${{ secrets.ALIYUN_CR_PASSWORD }}
+    
+    - name: Build and push to Aliyun CR
       uses: docker/build-push-action@v6
       with:
         context: .
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: ${{ env.ALIYUN_TAGS }}
         build-args: |
           VERSION=${{ env.VERSION }}
         cache-from: type=gha
-        cache-to: type=gha,mode=max 
+        cache-to: type=gha,mode=max
+    
+    # 第二步：登录并推送到Docker Hub
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ vars.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Push to Docker Hub
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ env.DOCKER_HUB_TAGS }}
+        build-args: |
+          VERSION=${{ env.VERSION }}
+        cache-from: type=gha 
