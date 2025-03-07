@@ -31,6 +31,8 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies in virtual environment
+# 阿里云：aliyun-python-sdk-core aliyun-python-sdk-alidns
+# 腾讯云：tccli
 RUN pip install --upgrade pip && \
     pip install aliyun-python-sdk-core aliyun-python-sdk-alidns tccli
 

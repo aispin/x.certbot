@@ -46,11 +46,8 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         else
-          # 如果不是标签触发，则使用最近的标签加上提交哈希
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          LATEST_VERSION=${LATEST_TAG#v}
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-          VERSION="${LATEST_VERSION}-dev.${COMMIT_HASH}"
+          # 非标签触发时，仅用于构建参数
+          VERSION="latest"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         fi
@@ -64,9 +61,11 @@ jobs:
           ${{ vars.DOCKERHUB_USERNAME }}/x.certbot
           ${{ secrets.ALIYUN_CR_URL }}/${{ vars.ALIYUN_CR_NAMESPACE }}/x.certbot
         tags: |
+          # 始终使用 latest 标签
           type=raw,value=latest
-          type=semver,pattern={{version}},value=${{ env.VERSION }}
-          type=sha,format=short
+          # 只在发布标签时生成版本标签
+          type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ github.ref_type == 'tag' }}
+          # 不再生成 sha 标签
     
     - name: Build and push
       uses: docker/build-push-action@v6
