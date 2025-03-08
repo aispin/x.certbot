@@ -11,14 +11,21 @@
 # 删除 DNS 记录：https://cloud.tencent.com/document/product/1427/56168
 # ================================
 
+# 加载控制台工具
+if [ -f "/usr/local/bin/scripts/console_utils.sh" ]; then
+    source "/usr/local/bin/scripts/console_utils.sh"
+fi
+
 # Activate the virtual environment
 source /opt/venv/bin/activate
+[ "$DEBUG" = "true" ] && print_debug "已激活 Python 虚拟环境"
 
 # Source the helper functions
 if [ -f "$(dirname "$0")/helper.sh" ]; then
     source "$(dirname "$0")/helper.sh"
+    [ "$DEBUG" = "true" ] && print_debug "已加载 helper.sh"
 else
-    echo "Warning: helper.sh not found, using built-in functions"
+    print_warning "helper.sh 未找到，使用内置函数"
 fi
 
 # Set default values
@@ -46,12 +53,12 @@ fi
 
 # Check if required variables are set
 if [ -z "$DOMAIN" ] || [ -z "$VALUE" ]; then
-    echo "Error: CERTBOT_DOMAIN and CERTBOT_VALIDATION environment variables must be set."
+    print_error "CERTBOT_DOMAIN 和 CERTBOT_VALIDATION 环境变量必须设置。"
     exit 1
 fi
 
 if [ -z "$TENCENTCLOUD_SECRET_ID" ] || [ -z "$TENCENTCLOUD_SECRET_KEY" ]; then
-    echo "Error: TENCENTCLOUD_SECRET_ID and TENCENTCLOUD_SECRET_KEY environment variables must be set."
+    print_error "TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY 环境变量必须设置。"
     exit 1
 fi
 
@@ -62,7 +69,7 @@ export TENCENTCLOUD_REGION=${TENCENTCLOUD_REGION:-"ap-guangzhou"}
 
 # Configure tccli if not already configured
 # This is a non-interactive way to configure tccli
-echo "Configuring Tencent Cloud CLI..."
+print_cloud_provider "tencentcloud" "配置腾讯云 CLI..."
 tccli configure set secretId "$TENCENTCLOUD_SECRET_ID" 2>/dev/null
 tccli configure set secretKey "$TENCENTCLOUD_SECRET_KEY" 2>/dev/null
 tccli configure set region "$TENCENTCLOUD_REGION" 2>/dev/null
@@ -108,77 +115,105 @@ else
     FULL_RECORD_NAME="$RECORD.$SUBDOMAIN_PREFIX"
 fi
 
-echo "Domain: $DOMAIN"
-echo "Main domain: $MAIN_DOMAIN"
-echo "Subdomain prefix: $SUBDOMAIN_PREFIX"
-echo "Record: $FULL_RECORD_NAME"
-echo "Value: $VALUE"
-echo "Action: $ACTION"
+print_subheader "DNS 验证信息"
+print_key_value "域名" "$DOMAIN"
+print_key_value "主域名" "$MAIN_DOMAIN"
+print_key_value "子域名前缀" "$SUBDOMAIN_PREFIX"
+print_key_value "记录名" "$FULL_RECORD_NAME"
+print_key_value "记录值" "$VALUE"
+print_key_value "操作" "$ACTION"
 
-# Function to get domain ID
+# Function to get domain ID from domain name
 get_domain_id() {
-    local domain=$1
+    local domain_name=$1
+    local domain_id
     
-    # Use tccli to get domain information
-    echo "Getting domain information for $domain..."
-    result=$(tccli dnspod DescribeDomain --Domain "$domain" 2>/dev/null)
+    print_dns "查询域名 ID: $domain_name"
     
-    # Check if command was successful
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to get domain information for $domain"
-        echo "Command output: $result"
-        return 1
-    fi
-    
-    # Extract domain ID
-    domain_id=$(echo "$result" | jq -r '.DomainInfo.Id')
+    # Query domain list to get domain ID
+    domain_id=$(tccli dnspod DescribeDomainList --cli-unfold-argument \
+        --Domain "$domain_name" \
+        --output json | jq -r '.DomainList[0].DomainId')
     
     if [ -z "$domain_id" ] || [ "$domain_id" == "null" ]; then
-        echo "Error: Could not retrieve domain ID for $domain"
-        echo "API response: $result"
+        print_error "无法获取域名 ID，请确保域名已添加到腾讯云 DNSPod"
+        exit 1
+    fi
+    
+    print_dns "域名 ID: $domain_id"
+    echo "$domain_id"
+}
+
+# Function to get record ID from domain ID and record name
+get_record_id() {
+    local domain_id=$1
+    local record_name=$2
+    local record_type=${3:-"TXT"}
+    local record_value=${4:-""}
+    local record_id
+    
+    print_dns "查询记录 ID: $record_name"
+    
+    # Query record list to get record ID
+    if [ -n "$record_value" ]; then
+        # If record value is provided, filter by it
+        record_id=$(tccli dnspod DescribeRecordList --cli-unfold-argument \
+            --Domain "$MAIN_DOMAIN" \
+            --DomainId "$domain_id" \
+            --Subdomain "$record_name" \
+            --RecordType "$record_type" \
+            --output json | jq -r --arg value "$record_value" '.RecordList[] | select(.Value == $value) | .RecordId')
+    else
+        # Otherwise just get the first matching record
+        record_id=$(tccli dnspod DescribeRecordList --cli-unfold-argument \
+            --Domain "$MAIN_DOMAIN" \
+            --DomainId "$domain_id" \
+            --Subdomain "$record_name" \
+            --RecordType "$record_type" \
+            --output json | jq -r '.RecordList[0].RecordId')
+    fi
+    
+    if [ -z "$record_id" ] || [ "$record_id" == "null" ]; then
+        print_warning "未找到记录 ID"
         return 1
     fi
     
-    echo "Domain ID for $domain: $domain_id"
-    echo "$domain_id"
+    print_dns "记录 ID: $record_id"
+    echo "$record_id"
 }
 
 # Perform the DNS operation
 if [ "$ACTION" == "add" ]; then
-    # Add DNS record
-    echo "Adding DNS TXT record using Tencent Cloud CLI..."
-    
     # Get domain ID
-    domain_id=$(get_domain_id "$MAIN_DOMAIN")
-    if [ $? -ne 0 ]; then
+    DOMAIN_ID=$(get_domain_id "$MAIN_DOMAIN")
+    
+    # Add DNS record
+    print_dns "添加 DNS 记录..."
+    
+    # Create TXT record
+    RESPONSE=$(tccli dnspod CreateRecord --cli-unfold-argument \
+        --Domain "$MAIN_DOMAIN" \
+        --DomainId "$DOMAIN_ID" \
+        --SubDomain "$FULL_RECORD_NAME" \
+        --RecordType "TXT" \
+        --RecordLine "默认" \
+        --Value "$VALUE" \
+        --TTL 600 \
+        --output json)
+    
+    RESULT_CODE=$(echo "$RESPONSE" | jq -r '.RequestId')
+    
+    if [ -z "$RESULT_CODE" ] || [ "$RESULT_CODE" == "null" ]; then
+        print_error "添加 DNS 记录失败: $RESPONSE"
         exit 1
     fi
     
-    # Add TXT record using tccli
-    echo "Creating TXT record for $FULL_RECORD_NAME..."
-    result=$(tccli dnspod CreateRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --SubDomain "$FULL_RECORD_NAME" --RecordType "TXT" --RecordLine "默认" --Value "$VALUE" --TTL 600 2>/dev/null)
-    
-    # Check if command was successful
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to add TXT record"
-        echo "Command output: $result"
-        exit 1
-    fi
-    
-    # Extract record ID for reference
-    record_id=$(echo "$result" | jq -r '.RecordId')
-    echo "TXT record added successfully with ID: $record_id"
-    
-    # Store record ID for cleanup (optional)
-    if [ -n "$CERTBOT_TOKEN" ]; then
-        mkdir -p /tmp/CERTBOT_$CERTBOT_TOKEN
-        echo "$record_id" > /tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID
-    fi
+    print_success "DNS 记录添加成功"
     
     # 计算验证尝试次数和等待时间
     if type calculate_verification_timing >/dev/null 2>&1; then
         read -r VERIFY_ATTEMPTS VERIFY_WAIT_TIME REMAINING_WAIT_TIME <<< $(calculate_verification_timing $DNS_PROPAGATION_SECONDS 3)
-        echo "验证配置: $VERIFY_ATTEMPTS 次尝试, 每次等待 $VERIFY_WAIT_TIME 秒, 剩余等待 $REMAINING_WAIT_TIME 秒"
+        print_info "验证配置: $VERIFY_ATTEMPTS 次尝试, 每次等待 $VERIFY_WAIT_TIME 秒, 剩余等待 $REMAINING_WAIT_TIME 秒"
     else
         VERIFY_ATTEMPTS=3
         VERIFY_WAIT_TIME=$((DNS_PROPAGATION_SECONDS / 4))
@@ -191,75 +226,49 @@ if [ "$ACTION" == "add" ]; then
         VERIFY_RESULT=$?
         
         if [ $VERIFY_RESULT -eq 0 ]; then
-            echo "DNS 验证成功，继续处理..."
+            print_success "DNS 验证成功，继续处理..."
         else
-            echo "DNS 验证未成功，但将继续等待剩余时间..."
+            print_warning "DNS 验证未成功，但将继续等待剩余时间..."
             # 即使验证失败，也等待剩余时间，让 Certbot 有机会验证
             if [ $REMAINING_WAIT_TIME -gt 0 ]; then
-                echo "等待剩余 $REMAINING_WAIT_TIME 秒..."
+                print_info "等待剩余 $REMAINING_WAIT_TIME 秒..."
                 sleep $REMAINING_WAIT_TIME
             fi
         fi
     else
         # 如果没有验证函数，则使用原来的等待逻辑
-        echo "Waiting for DNS propagation (${DNS_PROPAGATION_SECONDS} seconds)..."
+        print_info "等待 DNS 传播 (${DNS_PROPAGATION_SECONDS} 秒)..."
         sleep $DNS_PROPAGATION_SECONDS
     fi
-    
 elif [ "$ACTION" == "delete" ]; then
-    echo "Deleting DNS TXT record using Tencent Cloud CLI..."
-    
     # Get domain ID
-    domain_id=$(get_domain_id "$MAIN_DOMAIN")
-    if [ $? -ne 0 ]; then
-        exit 1
-    fi
+    DOMAIN_ID=$(get_domain_id "$MAIN_DOMAIN")
     
-    # Try to get record ID from temp file if available
-    record_id=""
-    if [ -n "$CERTBOT_TOKEN" ] && [ -f "/tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID" ]; then
-        record_id=$(cat "/tmp/CERTBOT_$CERTBOT_TOKEN/RECORD_ID")
-        echo "Found stored record ID: $record_id"
-    fi
+    # Find the record ID
+    RECORD_ID=$(get_record_id "$DOMAIN_ID" "$FULL_RECORD_NAME" "TXT" "$VALUE")
     
-    if [ -z "$record_id" ]; then
-        # Find the record ID by listing records and filtering
-        echo "Searching for TXT record..."
-        result=$(tccli dnspod DescribeRecordList --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --Subdomain "$FULL_RECORD_NAME" --RecordType "TXT" 2>/dev/null)
+    if [ -n "$RECORD_ID" ]; then
+        # Delete the record
+        print_dns "删除记录 ID: $RECORD_ID"
         
-        # Check if command was successful
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to list DNS records"
-            echo "Command output: $result"
+        RESPONSE=$(tccli dnspod DeleteRecord --cli-unfold-argument \
+            --Domain "$MAIN_DOMAIN" \
+            --DomainId "$DOMAIN_ID" \
+            --RecordId "$RECORD_ID" \
+            --output json)
+        
+        RESULT_CODE=$(echo "$RESPONSE" | jq -r '.RequestId')
+        
+        if [ -z "$RESULT_CODE" ] || [ "$RESULT_CODE" == "null" ]; then
+            print_error "删除 DNS 记录失败: $RESPONSE"
             exit 1
         fi
         
-        # Find record with matching value
-        record_id=$(echo "$result" | jq -r ".RecordList[] | select(.Value==\"$VALUE\") | .RecordId")
-    fi
-    
-    if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
-        # Delete the record using tccli
-        echo "Deleting record ID: $record_id"
-        delete_result=$(tccli dnspod DeleteRecord --Domain "$MAIN_DOMAIN" --DomainId "$domain_id" --RecordId "$record_id" 2>/dev/null)
-        
-        # Check if command was successful
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to delete TXT record"
-            echo "Command output: $delete_result"
-            exit 1
-        fi
-        
-        echo "TXT record deleted successfully"
-        
-        # Clean up temp file if it exists
-        if [ -n "$CERTBOT_TOKEN" ] && [ -d "/tmp/CERTBOT_$CERTBOT_TOKEN" ]; then
-            rm -rf "/tmp/CERTBOT_$CERTBOT_TOKEN"
-        fi
+        print_success "DNS 记录删除成功"
     else
-        echo "Record not found, nothing to delete"
+        print_warning "未找到记录，无需删除"
     fi
 fi
 
-echo "Tencent Cloud DNS operation completed successfully"
+print_success "腾讯云 DNS 操作成功完成"
 exit 0 

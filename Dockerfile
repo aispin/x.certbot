@@ -19,11 +19,12 @@ RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/pl
 # Copy scripts and plugins
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/deploy-hook.sh /usr/local/bin/scripts/deploy-hook.sh
+COPY scripts/console_utils.sh /usr/local/bin/scripts/console_utils.sh
 COPY plugins/dns/ /usr/local/bin/plugins/dns/
 COPY plugins/http/ /usr/local/bin/plugins/http/
 
 # Set execute permissions
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/scripts/deploy-hook.sh && \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/scripts/deploy-hook.sh /usr/local/bin/scripts/console_utils.sh && \
     chmod +x /usr/local/bin/plugins/dns/*.sh /usr/local/bin/plugins/http/*.sh
 
 # Create virtual environment for Python packages
@@ -82,6 +83,10 @@ ENV CRON_ENABLED="false"
 ENV CRON_SCHEDULE="0 0 * * 1,4"
 # Keep container running even without cron
 ENV KEEP_RUNNING="false"
+# Console output configuration
+ENV NO_COLOR="false"
+ENV NO_EMOJI="false"
+ENV DEBUG="false"
 
 # Create directories for various purposes
 RUN mkdir -p /host-scripts /etc/letsencrypt/certs
