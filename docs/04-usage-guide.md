@@ -594,7 +594,7 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 | 环境变量 | 必选 | 默认值 | 描述 |
 |----------|------|-------|------|
 | CERT_OUTPUT_DIR | 否 | /etc/letsencrypt/certs | 证书输出目录 |
-| CREATE_DOMAIN_DIRS | 否 | false | 是否为每个域名创建单独的子目录 |
+| CREATE_DOMAIN_DIRS | 否 | true | 是否为每个域名创建单独的子目录 |
 | CREATE_METADATA | 否 | false | 是否创建证书元数据文件 |
 | CERT_FILE_PERMISSIONS | 否 | 644 | 证书文件权限 |
 
@@ -620,6 +620,8 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 - `CERTBOT_DOMAIN`: 当前正在验证的域名
 - `CERTBOT_VALIDATION`: Let's Encrypt 提供的验证值
 
+注：X Certbot 内置，会根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
+
 #### 清理钩子 (Cleanup Hook)
 
 清理钩子脚本用于清理验证完成后的资源。自定义脚本应接受 `clean` 参数：
@@ -627,6 +629,8 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 ```bash
 your-cleanup-script.sh clean
 ```
+
+注：X Certbot 内置，会根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
 
 #### 部署钩子 (Deploy Hook)
 
@@ -637,3 +641,129 @@ your-cleanup-script.sh clean
 - `RENEWED_PRIVKEY`: 私钥文件路径
 - `RENEWED_CERT`: 证书文件路径
 - `RENEWED_CHAIN`: 证书链文件路径 
+
+注：X Certbot 内置，证书实际更新后调用，见 [scripts/deploy-hook.sh](../scripts/deploy-hook.sh)，除非想完全自定义，否则不要设置
+
+### 8.12 钩子脚本执行流程
+
+X Certbot 使用多个钩子脚本来实现自动化的证书申请、验证和部署流程。以下是这些钩子的执行顺序和主要作用：
+
+```
+1. manual-auth-hook → 创建验证记录（DNS TXT 或 HTTP 文件）
+2. Let's Encrypt 验证域名所有权
+3. manual-cleanup-hook → 清理验证记录
+4. Let's Encrypt 颁发/续期证书
+5. deploy-hook → 部署新证书，执行后续操作
+```
+
+#### 8.12.1 deploy-hook 内部流程
+
+当证书成功更新后，deploy-hook 会执行以下操作：
+
+1. 复制证书文件到指定的输出目录
+2. 设置适当的文件权限
+3. 可选地创建元数据文件（如果 `CREATE_METADATA=true`）
+4. 执行自定义后续脚本（如果配置了 `POST_RENEWAL_SCRIPT`）
+5. 或执行宿主机脚本（如果存在 `/host-scripts/post-renewal.sh`）
+6. 发送 webhook 通知（如果配置了 `WEBHOOK_URL`）
+
+#### 8.12.2 自定义后续脚本
+
+您可以通过以下两种方式配置证书更新后的自定义操作：
+
+1. **设置 POST_RENEWAL_SCRIPT 环境变量**：
+   ```
+   -e POST_RENEWAL_SCRIPT=/path/to/your-script.sh
+   ```
+
+2. **挂载宿主机脚本**（推荐，不用设置 `POST_RENEWAL_SCRIPT` 变量）：
+   ```
+   -v /path/on/host/restart-services.sh:/host-scripts/post-renewal.sh
+   ```
+
+这些脚本通常用于重启 Web 服务器、分发证书或执行其他依赖于新证书的操作。
+
+##### 自定义脚本详解
+
+`POST_RENEWAL_SCRIPT` 环境变量允许您指定一个在证书更新成功后自动执行的脚本。这个脚本**不需要在容器内部**，而是通常位于宿主机上，通过卷挂载到容器内。
+
+**脚本位置选项**：
+
+1. **容器外部脚本（推荐）**：
+   - 脚本位于宿主机上，通过卷挂载到容器内
+   - 这种方式更灵活，可以直接操作宿主机环境或其他服务器
+
+2. **容器内部脚本**：
+   - 脚本位于容器内部（如通过自定义镜像添加）
+   - 这种方式限制较多，无法直接操作宿主机环境
+
+**脚本接收的环境变量**：
+
+执行时，脚本会自动接收以下环境变量：
+```
+RENEWED_DOMAIN - 已更新证书的主域名
+RENEWED_FULLCHAIN - 完整证书链文件的路径
+RENEWED_PRIVKEY - 私钥文件的路径
+RENEWED_CERT - 证书文件的路径
+RENEWED_CHAIN - 证书链文件的路径
+```
+
+**配置示例**：
+
+1. 创建宿主机脚本（例如 `/opt/scripts/restart-nginx.sh`）：
+   ```bash
+   #!/bin/bash
+   
+   echo "证书已更新: $RENEWED_DOMAIN"
+   echo "证书路径: $RENEWED_FULLCHAIN"
+   
+   # 示例：SSH 到 Web 服务器重启 Nginx
+   ssh webserver "systemctl restart nginx"
+   
+   # 或执行其他操作...
+   exit 0
+   ```
+
+2. 确保脚本有执行权限：
+   ```bash
+   chmod +x /opt/scripts/restart-nginx.sh
+   ```
+
+3. 配置 Docker 运行命令：
+   ```bash
+   docker run -d \
+     -v /opt/scripts/restart-nginx.sh:/scripts/restart-nginx.sh \
+     -e POST_RENEWAL_SCRIPT=/scripts/restart-nginx.sh \
+     -v /etc/letsencrypt:/etc/letsencrypt \
+     -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+     ... 其他配置 ...
+     certbot-dns-aliyun
+   ```
+
+**最佳实践**：
+
+- 脚本应该是**幂等的**：可以多次执行而不产生副作用
+- 添加**错误处理**：脚本应该处理可能的错误情况
+- 记录**日志**：添加适当的日志输出，便于排查问题
+- **权限控制**：确保脚本只有必要的权限，特别是涉及敏感操作时
+- **测试**：在生产环境使用前充分测试脚本功能
+
+**常见应用场景**：
+
+- 重启 Web 服务器（如 Nginx、Apache）以加载新证书
+- 将更新后的证书复制或同步到其他服务器
+- 更新负载均衡器、CDN 或其他依赖证书的服务配置
+- 发送自定义通知（除了内置的 Webhook 功能外）
+- 执行证书备份或权限调整
+
+#### 8.12.3 Webhook 通知
+
+通过设置 `WEBHOOK_URL` 环境变量，您可以在证书更新后接收通知：
+
+```
+-e WEBHOOK_URL=https://your-webhook-endpoint.com/notify
+```
+
+X Certbot 会发送包含域名、状态和时间戳的 JSON 数据到指定 URL。
+
+更多详细信息，请参阅 [开发指南中的钩子脚本章节](./05-development-guide.md#8-钩子脚本与自动化流程)。 

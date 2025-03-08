@@ -60,12 +60,19 @@ ENV WEBROOT_PATH="/var/www/html"
 # DNS configuration
 ENV DNS_PROPAGATION_SECONDS="60"
 # Hooks configuration (can be overridden to use custom hooks)
+# 认证钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
 ENV AUTH_HOOK=""
+# 清理钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
 ENV CLEANUP_HOOK=""
+# 部署钩子 - 证书实际更新后调用，见 scripts/deploy-hook.sh，除非想完全自定义，否则不要设置
 ENV DEPLOY_HOOK=""
+# 证书更新后执行的自定义脚本 - 用于重启服务或分发证书等操作。推荐直接使用挂载宿主机脚本 -v /path/on/host/restart-services.sh:/host-scripts/post-renewal.sh
+ENV POST_RENEWAL_SCRIPT=""
+
 # Certificate output configuration
 ENV CERT_OUTPUT_DIR="/etc/letsencrypt/certs"
-ENV CREATE_DOMAIN_DIRS="false"
+# 创建域名目录
+ENV CREATE_DOMAIN_DIRS="true"
 ENV CREATE_METADATA="false"
 ENV CERT_FILE_PERMISSIONS="644"
 # Webhook notification (optional)

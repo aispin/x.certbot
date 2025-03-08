@@ -608,3 +608,406 @@ feat: 添加对多区域部署的支持
 3. 确保更新了相关文档
 4. 确保所有测试通过
 5. 请求多人审查重要变更 
+
+## 8. 钩子脚本与自动化流程
+
+X Certbot 利用 Certbot 的钩子系统实现自动化的证书申请、验证和部署流程。了解这些钩子的执行顺序和作用对于开发和调试非常重要。
+
+### 8.1 钩子执行流程
+
+以下流程图展示了 Certbot 钩子的执行顺序以及 X Certbot 中的自定义脚本调用关系：
+
+```mermaid
+flowchart TD
+    start[开始证书申请/续期] --> preHook[pre-hook\n在所有操作前执行]
+    
+    preHook --> authHook[manual-auth-hook\n创建验证记录]
+    authHook --> validation[Let's Encrypt\n验证域名所有权]
+    validation --> cleanupHook[manual-cleanup-hook\n清理验证记录]
+    
+    cleanupHook --> isSuccess{验证成功?}
+    isSuccess -- 否 --> failure[失败处理]
+    isSuccess -- 是 --> issueCert[Let's Encrypt\n颁发/续期证书]
+    
+    issueCert --> isChanged{证书已更新?}
+    isChanged -- 否 --> postHook
+    isChanged -- 是 --> deployHook[deploy-hook\n部署新证书]
+    
+    subgraph "deploy-hook.sh 内部流程"
+        deployHook --> copyCerts[复制证书文件到输出目录]
+        copyCerts --> setPerms[设置文件权限]
+        setPerms --> createMeta[可选: 创建元数据文件]
+        
+        createMeta --> hasPostScript{配置了\nPOST_RENEWAL_SCRIPT?}
+        hasPostScript -- 是 --> runPostScript[执行自定义后续脚本]
+        hasPostScript -- 否 --> checkHostScript{存在\npost-renewal.sh?}
+        
+        checkHostScript -- 是 --> runHostScript[执行宿主机脚本]
+        checkHostScript -- 否 --> skipScript[跳过脚本执行]
+        
+        runPostScript --> hasWebhook
+        runHostScript --> hasWebhook
+        skipScript --> hasWebhook
+        
+        hasWebhook{配置了\nWEBHOOK_URL?}
+        hasWebhook -- 是 --> sendWebhook[发送Webhook通知]
+        hasWebhook -- 否 --> deployDone[部署完成]
+        
+        sendWebhook --> deployDone
+    end
+    
+    deployHook --> postHook[post-hook\n在所有操作后执行]
+    failure --> postHook
+    
+    postHook --> finish[完成]
+    
+    classDef hookNode fill:#f9f,stroke:#333,stroke-width:2px,color:#000;
+    classDef certbotNode fill:#bbf,stroke:#333,stroke-width:2px,color:#000;
+    classDef scriptNode fill:#bfb,stroke:#333,stroke-width:2px,color:#000;
+    classDef decisionNode fill:#fdb,stroke:#333,stroke-width:2px,color:#000;
+    
+    class preHook,authHook,cleanupHook,deployHook,postHook hookNode;
+    class validation,issueCert certbotNode;
+    class runPostScript,runHostScript,sendWebhook scriptNode;
+    class isSuccess,isChanged,hasPostScript,checkHostScript,hasWebhook decisionNode;
+```
+
+### 8.2 钩子说明
+
+| 钩子名称 | 执行时机 | 主要作用 | 环境变量 |
+|---------|---------|---------|---------|
+| **pre-hook** | 所有操作前 | 准备环境，如停止 Web 服务器 | - |
+| **manual-auth-hook** | 验证前 | 创建域名验证记录（DNS 或 HTTP） | CERTBOT_DOMAIN, CERTBOT_VALIDATION, CERTBOT_TOKEN |
+| **manual-cleanup-hook** | 验证后 | 清理验证记录 | CERTBOT_DOMAIN, CERTBOT_VALIDATION, CERTBOT_TOKEN |
+| **deploy-hook** | 证书更新后 | 部署新证书，重启服务 | RENEWED_LINEAGE, RENEWED_DOMAINS |
+| **post-hook** | 所有操作后 | 恢复环境，如启动 Web 服务器 | - |
+
+### 8.3 X Certbot 自定义脚本
+
+#### 8.3.1 DNS 验证脚本 (manual-auth-hook)
+
+X Certbot 使用 `plugins/dns/{provider}.sh` 作为 DNS 验证的 manual-auth-hook。这些脚本负责：
+
+- 接收 `CERTBOT_DOMAIN` 和 `CERTBOT_VALIDATION` 环境变量
+- 创建 `_acme-challenge` TXT 记录
+- 返回成功状态码
+
+当脚本带 `clean` 参数执行时，作为 manual-cleanup-hook 使用，负责清理验证记录。
+
+#### 8.3.2 部署脚本 (deploy-hook)
+
+X Certbot 使用 `scripts/deploy-hook.sh` 作为 deploy-hook。这个脚本负责：
+
+- 复制证书文件到指定输出目录
+- 设置适当的文件权限
+- 可选地创建元数据文件
+- 执行自定义后续脚本
+- 发送 webhook 通知
+
+### 8.4 自定义后续脚本
+
+#### 8.4.1 POST_RENEWAL_SCRIPT
+
+- **作用**：在证书更新后执行自定义脚本，通常用于重启服务或分发证书
+- **调用时机**：在 deploy-hook 内部，证书文件复制完成后
+- **传递变量**：
+  ```
+  RENEWED_DOMAIN - 主域名
+  RENEWED_FULLCHAIN - 完整证书链路径
+  RENEWED_PRIVKEY - 私钥路径
+  RENEWED_CERT - 证书路径
+  RENEWED_CHAIN - 证书链路径
+  ```
+- **优先级**：如果设置了 POST_RENEWAL_SCRIPT，优先使用；否则尝试使用 /host-scripts/post-renewal.sh
+
+##### 技术实现详解
+
+`POST_RENEWAL_SCRIPT` 的执行逻辑在 `scripts/deploy-hook.sh` 中实现。执行流程如下：
+
+1. 检查 `POST_RENEWAL_SCRIPT` 环境变量是否设置
+2. 验证指定的脚本文件是否存在且可执行
+3. 设置必要的环境变量并执行脚本
+4. 如果 `POST_RENEWAL_SCRIPT` 未设置或无效，则尝试执行默认位置的脚本 `/host-scripts/post-renewal.sh`
+
+**执行条件**：
+```bash
+if [ -n "$POST_RENEWAL_SCRIPT" ] && [ -f "$POST_RENEWAL_SCRIPT" ] && [ -x "$POST_RENEWAL_SCRIPT" ]; then
+    # 执行自定义脚本
+elif [ -f "/host-scripts/post-renewal.sh" ] && [ -x "/host-scripts/post-renewal.sh" ]; then
+    # 执行默认位置脚本
+fi
+```
+
+**脚本执行环境**：
+
+脚本在容器内执行，但可以通过以下方式与外部环境交互：
+
+1. **SSH 连接**：脚本可以使用 SSH 连接到其他服务器执行命令
+2. **API 调用**：脚本可以调用外部 API 触发操作
+3. **共享卷**：脚本可以操作挂载到容器的宿主机目录
+
+**错误处理**：
+
+脚本的退出状态会被记录，但不会影响 Certbot 的整体执行流程。即使脚本执行失败，Certbot 也会认为证书更新成功。
+
+##### 开发自定义脚本
+
+开发自定义后续脚本时，请遵循以下指南：
+
+1. **脚本头部**：
+   ```bash
+   #!/bin/bash
+   set -e  # 遇到错误立即退出
+   
+   # 记录开始执行
+   echo "开始执行后续脚本: $(date)"
+   ```
+
+2. **使用环境变量**：
+   ```bash
+   echo "处理域名: $RENEWED_DOMAIN"
+   echo "证书路径: $RENEWED_FULLCHAIN"
+   echo "私钥路径: $RENEWED_PRIVKEY"
+   ```
+
+3. **错误处理**：
+   ```bash
+   if ! command_that_might_fail; then
+     echo "错误: 命令执行失败"
+     # 可以选择继续执行或退出
+     exit 1
+   fi
+   ```
+
+4. **日志记录**：
+   ```bash
+   log_file="/var/log/cert-renewal.log"
+   echo "[$(date)] 证书 $RENEWED_DOMAIN 已更新" >> $log_file
+   ```
+
+5. **执行外部命令示例**：
+   ```bash
+   # 重启 Nginx
+   if ssh user@webserver "systemctl restart nginx"; then
+     echo "Nginx 已重启"
+   else
+     echo "Nginx 重启失败"
+   fi
+   
+   # 分发证书到其他服务器
+   scp $RENEWED_FULLCHAIN user@otherserver:/etc/ssl/certs/
+   scp $RENEWED_PRIVKEY user@otherserver:/etc/ssl/private/
+   ```
+
+6. **完成处理**：
+   ```bash
+   echo "后续脚本执行完成: $(date)"
+   exit 0  # 正常退出
+   ```
+
+##### 调试技巧
+
+1. **测试脚本**：
+   在将脚本集成到 Certbot 流程前，先单独测试脚本功能：
+   ```bash
+   RENEWED_DOMAIN="example.com" \
+   RENEWED_FULLCHAIN="/path/to/fullchain.pem" \
+   RENEWED_PRIVKEY="/path/to/privkey.pem" \
+   RENEWED_CERT="/path/to/cert.pem" \
+   RENEWED_CHAIN="/path/to/chain.pem" \
+   ./your-script.sh
+   ```
+
+2. **添加详细日志**：
+   ```bash
+   set -x  # 启用命令跟踪
+   ```
+
+3. **检查脚本权限**：
+   确保脚本具有执行权限，且路径正确：
+   ```bash
+   chmod +x /path/to/your-script.sh
+   ```
+
+4. **验证环境变量**：
+   在脚本开始处打印所有环境变量，确保它们被正确传递：
+   ```bash
+   echo "环境变量:"
+   echo "RENEWED_DOMAIN=$RENEWED_DOMAIN"
+   echo "RENEWED_FULLCHAIN=$RENEWED_FULLCHAIN"
+   # 等等
+   ```
+
+#### 8.4.2 宿主机脚本 (/host-scripts/post-renewal.sh)
+
+当容器挂载了 `/host-scripts/post-renewal.sh` 时，deploy-hook 会在证书更新后执行此脚本。这通常用于：
+
+- 重启 Web 服务器加载新证书
+- 将证书分发到其他服务器
+- 更新负载均衡器配置
+- 执行其他依赖于新证书的操作
+
+### 8.5 Webhook 通知
+
+#### 8.5.1 WEBHOOK_URL
+
+- **作用**：在证书更新后发送通知到指定 URL
+- **调用时机**：在 deploy-hook 内部，自定义脚本执行后（如果有）
+- **发送数据**：
+  ```json
+  {
+    "domain": "example.com",
+    "status": "success",
+    "timestamp": "2023-03-07T12:34:56Z"
+  }
+  ```
+- **使用场景**：通知监控系统、触发其他自动化流程、记录证书更新事件
+
+### 8.6 开发自定义钩子
+
+如果您需要开发自定义钩子脚本，请遵循以下准则：
+
+1. **确保脚本可执行**：`chmod +x your-script.sh`
+2. **处理环境变量**：根据钩子类型处理相应的环境变量
+3. **返回正确的退出码**：成功时返回 0，失败时返回非 0 值
+4. **添加日志输出**：使用 echo 输出操作步骤和结果
+5. **错误处理**：捕获并处理可能的错误情况
+6. **幂等性**：确保脚本可以安全地多次执行
+
+#### 示例：自定义部署后脚本
+
+```bash
+#!/bin/bash
+# 自定义部署后脚本示例
+
+echo "证书已更新: $RENEWED_DOMAIN"
+echo "证书路径: $RENEWED_FULLCHAIN"
+
+# 重启 Web 服务器
+systemctl restart nginx
+
+# 发送通知
+curl -X POST -H "Content-Type: application/json" \
+  -d "{\"message\":\"证书已更新: $RENEWED_DOMAIN\"}" \
+  https://your-notification-service.com/api/notify
+
+exit 0
+```
+
+### 8.7 调试钩子脚本
+
+调试钩子脚本的方法：
+
+1. **添加详细日志**：使用 `set -x` 启用 bash 调试输出
+2. **手动测试**：设置必要的环境变量后手动执行脚本
+3. **检查退出码**：`echo $?` 查看脚本的退出状态
+4. **查看 Certbot 日志**：检查 Certbot 的详细日志输出
+5. **模拟环境变量**：
+   ```bash
+   CERTBOT_DOMAIN="example.com" \
+   CERTBOT_VALIDATION="validationstring" \
+   ./your-auth-hook.sh
+   ```
+
+通过理解这些钩子的执行流程和作用，您可以更有效地开发、调试和扩展 X Certbot 的功能。
+
+### 8.8 DNS 验证辅助函数
+
+为了提高代码复用性和维护性，项目提供了 `plugins/dns/helper.sh` 辅助脚本，其中包含了常用的 DNS 验证函数。这些函数可以被各个 DNS 提供商的脚本共享使用。
+
+#### 8.8.1 主要功能
+
+`helper.sh` 提供以下主要功能：
+
+1. **域名处理函数**：
+   - `get_main_domain`：从子域名中提取主域名
+   - `get_subdomain_prefix`：获取子域名前缀
+
+2. **DNS 验证函数**：
+   - `verify_dns_record`：验证 DNS 记录是否已正确传播
+   - `calculate_verification_timing`：计算验证尝试次数和等待时间
+
+#### 8.8.2 使用方法
+
+在 DNS 验证脚本中引入 `helper.sh`：
+
+```bash
+# 引入辅助函数
+if [ -f "$(dirname "$0")/helper.sh" ]; then
+    source "$(dirname "$0")/helper.sh"
+else
+    echo "Warning: helper.sh not found, using built-in functions"
+fi
+```
+
+使用 `verify_dns_record` 函数验证 DNS 记录：
+
+```bash
+# 计算验证尝试次数和等待时间
+if type calculate_verification_timing >/dev/null 2>&1; then
+    read -r VERIFY_ATTEMPTS VERIFY_WAIT_TIME REMAINING_WAIT_TIME <<< $(calculate_verification_timing $DNS_PROPAGATION_SECONDS 3)
+    echo "验证配置: $VERIFY_ATTEMPTS 次尝试, 每次等待 $VERIFY_WAIT_TIME 秒, 剩余等待 $REMAINING_WAIT_TIME 秒"
+fi
+
+# 验证 DNS 记录
+if type verify_dns_record >/dev/null 2>&1; then
+    verify_dns_record "$DOMAIN" "$VALUE" $VERIFY_ATTEMPTS $VERIFY_WAIT_TIME
+    VERIFY_RESULT=$?
+    
+    if [ $VERIFY_RESULT -eq 0 ]; then
+        echo "DNS 验证成功，继续处理..."
+    else
+        echo "DNS 验证未成功，但将继续等待剩余时间..."
+    fi
+fi
+```
+
+#### 8.8.3 函数说明
+
+##### verify_dns_record
+
+验证 DNS 记录是否已正确传播。
+
+**参数**：
+- `$1`：域名
+- `$2`：期望的验证值
+- `$3`：最大尝试次数（默认为 3）
+- `$4`：每次尝试之间的等待时间（默认为 20 秒）
+
+**返回值**：
+- `0`：验证成功
+- `1`：验证失败
+
+**示例**：
+
+```bash
+verify_dns_record "example.com" "validation_token" 3 20
+```
+
+##### calculate_verification_timing
+
+计算验证尝试次数和等待时间。
+
+**参数**：
+- `$1`：总等待时间（秒）
+- `$2`：尝试次数（默认为 3）
+
+**返回值**：
+空格分隔的三个值：尝试次数、每次等待时间、剩余等待时间
+
+**示例**：
+
+```bash
+read -r ATTEMPTS WAIT_TIME REMAINING_TIME <<< $(calculate_verification_timing 60 3)
+```
+
+#### 8.8.4 开发新的 DNS 验证脚本
+
+开发新的 DNS 验证脚本时，建议遵循以下步骤：
+
+1. 引入 `helper.sh` 辅助脚本
+2. 使用 `get_main_domain` 和 `get_subdomain_prefix` 函数处理域名
+3. 添加 DNS 记录后，使用 `verify_dns_record` 函数验证记录是否已传播
+4. 即使验证失败，也应继续等待剩余时间，让 Certbot 有机会验证
+
+这样可以确保所有 DNS 验证脚本具有一致的行为和可靠性。 

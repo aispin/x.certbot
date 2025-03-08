@@ -103,8 +103,8 @@ configure_provider() {
         export TENCENTCLOUD_REGION=$TENCENTCLOUD_REGION
         
         # Ensure tccli from virtual environment is used
-        echo "Using tccli from virtual environment at /opt/tccli-venv"
-        export PATH="/opt/tccli-venv/bin:$PATH"
+        echo "Using tccli from virtual environment at /opt/venv"
+        export PATH="/opt/venv/bin:$PATH"
         
         # Configure Tencent Cloud CLI non-interactively
         echo "Configuring Tencent Cloud CLI..."
