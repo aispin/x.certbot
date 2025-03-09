@@ -179,7 +179,10 @@ process_domains() {
         fi
     done
     
-    echo "${domain_args[@]}"
+    # 返回域名参数数组
+    for arg in "${domain_args[@]}"; do
+        echo "$arg"
+    done
 }
 
 # Execute hook check
@@ -229,7 +232,8 @@ fi
 
 # Get domain parameters
 print_step "1" "准备域名参数"
-DOMAIN_ARGS=($(process_domains))
+# 使用 mapfile 或 readarray 捕获函数输出到数组
+mapfile -t DOMAIN_ARGS < <(process_domains)
 
 # Obtain the certificates for all domains
 print_step "2" "获取证书"
