@@ -74,7 +74,7 @@ ENV POST_RENEWAL_SCRIPT=""
 ENV CERT_OUTPUT_DIR="/etc/letsencrypt/certs"
 # 创建域名目录
 ENV CREATE_DOMAIN_DIRS="true"
-ENV CREATE_METADATA="false"
+ENV CREATE_METADATA="true"
 ENV CERT_FILE_PERMISSIONS="644"
 # Webhook notification (optional)
 ENV WEBHOOK_URL=""

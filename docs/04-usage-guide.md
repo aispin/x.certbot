@@ -595,7 +595,7 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 |----------|------|-------|------|
 | CERT_OUTPUT_DIR | 否 | /etc/letsencrypt/certs | 证书输出目录 |
 | CREATE_DOMAIN_DIRS | 否 | true | 是否为每个域名创建单独的子目录 |
-| CREATE_METADATA | 否 | false | 是否创建证书元数据文件 |
+| CREATE_METADATA | 否 | true | 是否创建证书元数据文件 |
 | CERT_FILE_PERMISSIONS | 否 | 644 | 证书文件权限 |
 
 ### 8.9 通知配置
