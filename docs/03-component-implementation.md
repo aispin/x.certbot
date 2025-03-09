@@ -33,8 +33,8 @@ fi
 2. **环境变量检查**:
 ```bash
 # 检查必需的环境变量
-if [ -z "$ALIYUN_REGION" ] || [ -z "$ALIYUN_ACCESS_KEY_ID" ] || [ -z "$ALIYUN_ACCESS_KEY_SECRET" ] || [ -z "$DOMAINS" ] || [ -z "$EMAIL" ]; then
-    echo "Error: Missing required environment variables. Please set: ALIYUN_REGION, ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET, DOMAINS, EMAIL"
+if [ -z "$ALIYUN_REGION" ] || [ -z "$ALIYUN_ACCESS_KEY_ID" ] || [ -z "$ALIYUN_ACCESS_KEY_SECRET" ] || [ -z "$DOMAIN_ARG" ] || [ -z "$EMAIL" ]; then
+    echo "Error: Missing required environment variables. Please set: ALIYUN_REGION, ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET, DOMAIN_ARG, EMAIL"
     exit 1
 fi
 ```
@@ -45,34 +45,7 @@ fi
 aliyun configure set --profile akProfile --mode AK --region $ALIYUN_REGION --access-key-id $ALIYUN_ACCESS_KEY_ID --access-key-secret $ALIYUN_ACCESS_KEY_SECRET
 ```
 
-4. **域名处理函数**:
-```bash
-# 函数用于解析域名并构建 certbot 命令
-process_domains() {
-    local domains_array
-    # 解析逗号分隔的域名列表
-    IFS=',' read -ra domains_array <<< "$DOMAINS"
-
-    local domain_params=""
-    for domain in "${domains_array[@]}"; do
-        # 去除空白
-        domain=$(echo "$domain" | xargs)
-        # 添加主域名
-        domain_params="$domain_params -d $domain"
-        
-        # 检查是否为顶级域名（只包含一个点）
-        if [[ $(echo "$domain" | grep -o "\." | wc -l) -eq 1 ]]; then
-            # 如果是顶级域名，添加通配符
-            domain_params="$domain_params -d *.$domain"
-            echo "Adding wildcard for top-level domain: *.$domain"
-        fi
-    done
-    
-    echo $domain_params
-}
-```
-
-5. **证书续期处理**:
+4. **证书续期处理**:
 ```bash
 # 主执行流程
 if [ "$1" == "renew" ]; then
@@ -95,30 +68,20 @@ if [ "$1" == "renew" ]; then
 fi
 ```
 
-6. **证书申请处理**:
+5. **证书申请处理**:
 ```bash
-# 获取域名参数
-DOMAIN_PARAMS=$(process_domains)
-
-# 为所有域名获取证书
-echo "Obtaining certificates for $DOMAIN_PARAMS using $CHALLENGE_TYPE challenge with $CLOUD_PROVIDER provider"
-
-certbot_cmd="certbot certonly $DOMAIN_PARAMS --manual --preferred-challenges $CHALLENGE_TYPE \
-    --manual-auth-hook \"$AUTH_HOOK\" \
-    --manual-cleanup-hook \"$CLEANUP_HOOK\" \
-    --agree-tos --email $EMAIL --non-interactive \
-    --deploy-hook \"$DEPLOY_HOOK\""
-
-if [ "$CHALLENGE_TYPE" == "dns" ]; then
-    # DNS specific environment variables
-    export DNS_PROPAGATION_SECONDS
-fi
-
-# Execute certbot command
-eval $certbot_cmd
+# 直接使用 DOMAIN_ARG 参数，不再需要处理域名
+certbot certonly $DOMAIN_ARG \
+    --manual \
+    --preferred-challenges dns \
+    --manual-auth-hook /path/to/auth-hook.sh \
+    --manual-cleanup-hook /path/to/cleanup-hook.sh \
+    --agree-tos \
+    --email $EMAIL \
+    --non-interactive
 ```
 
-7. **启动 Cron 服务**:
+6. **启动 Cron 服务**:
 ```bash
 # 启动 cron 守护进程
 crond -f -l 2
@@ -165,7 +128,7 @@ if [ -n "$CERTBOT_VALIDATION" ]; then
 fi
 ```
 
-3. **域名处理函数**:
+3. **DNS 辅助函数**:
 ```bash
 # 函数用于从子域名提取主域名
 get_main_domain() {
@@ -189,6 +152,80 @@ get_subdomain_prefix() {
     else
         echo "${domain%.$main_domain}"
     fi
+}
+
+# 函数用于验证 DNS 记录传播
+verify_dns_record() {
+    local domain=$1
+    local expected_value=$2
+    local max_attempts=${3:-3}
+    local wait_time=${4:-20}
+    
+    echo "验证 DNS 记录传播情况..."
+    echo "域名: _acme-challenge.$domain"
+    echo "预期值: $expected_value"
+    
+    # 初始等待，给 DNS 一些传播时间
+    sleep $wait_time
+    
+    for attempt in $(seq 1 $max_attempts); do
+        echo "尝试 $attempt/$max_attempts 验证 DNS 记录..."
+        
+        # 使用 dig 查询 TXT 记录
+        TXT_RECORD=$(dig +short TXT _acme-challenge.$domain)
+        echo "查询结果: $TXT_RECORD"
+        
+        if [[ "$TXT_RECORD" == *"$expected_value"* ]]; then
+            echo "✅ DNS 验证成功: 找到匹配的 TXT 记录"
+            return 0
+        else
+            echo "⚠️ 警告: 未找到匹配的 TXT 记录，继续尝试..."
+            
+            # 使用多个 DNS 服务器查询
+            echo "尝试使用其他 DNS 服务器查询..."
+            for dns_server in 8.8.8.8 1.1.1.1 114.114.114.114; do
+                echo "使用 DNS 服务器 $dns_server 查询:"
+                OTHER_RESULT=$(dig @$dns_server +short TXT _acme-challenge.$domain)
+                echo "结果: $OTHER_RESULT"
+                
+                if [[ "$OTHER_RESULT" == *"$expected_value"* ]]; then
+                    echo "✅ 使用 $dns_server 验证成功"
+                    return 0
+                fi
+            done
+            
+            # 如果不是最后一次尝试，则等待后重试
+            if [ $attempt -lt $max_attempts ]; then
+                echo "等待 $wait_time 秒后重试..."
+                sleep $wait_time
+            fi
+        fi
+    done
+    
+    echo "⚠️ 警告: DNS 验证未成功，但将继续尝试 Let's Encrypt 验证"
+    echo "可能原因:"
+    echo "1. DNS 传播需要更长时间"
+    echo "2. DNS 记录未正确添加"
+    echo "3. DNS 服务器缓存问题"
+    echo "建议增加 DNS_PROPAGATION_SECONDS 值或检查 DNS 配置"
+    
+    # 返回非零但不退出脚本，让 Certbot 继续尝试验证
+    return 1
+}
+
+# 函数用于计算验证时间
+calculate_verification_timing() {
+    local total_time=$1
+    local attempts=${2:-3}
+    
+    # 计算每次验证之间的等待时间
+    local wait_time=$((total_time / (attempts + 1)))
+    
+    # 计算剩余等待时间
+    local remaining_time=$((total_time - attempts * wait_time))
+    
+    # 返回结果
+    echo "$attempts $wait_time $remaining_time"
 }
 ```
 
@@ -345,8 +382,8 @@ RUN pip install --upgrade pip && \
 ENV ALIYUN_REGION=""
 ENV ALIYUN_ACCESS_KEY_ID=""
 ENV ALIYUN_ACCESS_KEY_SECRET=""
-# 域名，以逗号分隔（例如 example.com,test.domain.com）
-ENV DOMAINS=""
+# 域名参数（格式 -d example.com -d *.domain.com）
+ENV DOMAIN_ARG=""
 ENV EMAIL=""
 ENV CRON_SCHEDULE="0 0 * * 1,4"
 # DNS 传播等待时间（秒）

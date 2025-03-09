@@ -49,7 +49,7 @@
 | ALIYUN_REGION | 是 | - | 阿里云区域 |
 | ALIYUN_ACCESS_KEY_ID | 是 | - | 阿里云访问密钥 ID |
 | ALIYUN_ACCESS_KEY_SECRET | 是 | - | 阿里云访问密钥 Secret |
-| DOMAINS | 是 | - | 域名列表，逗号分隔 |
+| DOMAIN_ARG | 是 | - | 完整域名参数，如 -d x.com -d *.x.com |
 | EMAIL | 是 | - | 证书所有者的电子邮件地址 |
 | CRON_SCHEDULE | 否 | 0 0 * * 1,4 | 证书续期的 cron 表达式 |
 | DNS_PROPAGATION_SECONDS | 否 | 60 | DNS 记录传播等待时间（秒） |
@@ -60,7 +60,7 @@
 ALIYUN_REGION=cn-hangzhou
 ALIYUN_ACCESS_KEY_ID=your-access-key-id
 ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
-DOMAINS=example.com,sub.example.com
+DOMAIN_ARG=-d example.com -d *.example.com
 EMAIL=your-email@example.com
 CRON_SCHEDULE=0 0 * * 1,4
 DNS_PROPAGATION_SECONDS=60
@@ -136,19 +136,29 @@ DNS_PROPAGATION_SECONDS=60
    - 环境变量:
      - RENEWED_LINEAGE: 证书目录路径
 
-## 域名处理规范
+## 域名参数规范
 
-1. **顶级域名处理**:
-   - 对于形如 `example.com` 的顶级域名，自动添加通配符证书 `*.example.com`
-   - 通过参数 `-d example.com -d *.example.com` 实现
+X Certbot 不再自动处理域名格式，而是将完整控制权交给用户。用户需要直接提供符合 certbot 命令行格式的域名参数：
 
-2. **子域名处理**:
-   - 对于形如 `sub.example.com` 的子域名，只申请该特定子域名的证书
-   - 通过参数 `-d sub.example.com` 实现
+1. **参数格式**:
+   - 使用 `-d domain` 格式指定每个域名
+   - 多个域名使用多个 `-d` 参数，如 `-d example.com -d *.example.com`
 
-3. **特殊 TLD 处理**:
-   - 支持识别特殊中文 TLD，如 `.com.cn`, `.net.cn` 等
-   - 通过 `get_main_domain()` 函数处理
+2. **通配符证书**:
+   - 如需通配符证书，直接使用 `*.domain.com` 格式
+   - 通配符证书必须使用 DNS 验证方式
+
+3. **示例**:
+   ```
+   # 单域名
+   DOMAIN_ARG="-d example.com"
+   
+   # 带通配符
+   DOMAIN_ARG="-d example.com -d *.example.com"
+   
+   # 多域名
+   DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com"
+   ```
 
 ## 证书管理规范
 

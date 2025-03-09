@@ -12,7 +12,7 @@ X Certbot 支持三种主要使用场景，请根据您的需求选择合适的�
 - [4. 场景三：GitHub Actions 自动化](#4-场景三github-actions-自动化)
 - [5. 常见问题与故障排除](#5-常见问题与故障排除)
 - [6. 安全最佳实践](#6-安全最佳实践)
-- [7. 附录：域名处理逻辑](#7-附录域名处理逻辑)
+- [7. 附录：域名参数格式](#7-附录域名参数格式)
 - [8. 配置选项完整参考](#8-配置选项完整参考)
 
 ## 1. 使用场景概述
@@ -195,7 +195,7 @@ curl -fsSL https://raw.githubusercontent.com/aispin/x.certbot/main/install.sh | 
       -e ALIYUN_REGION="cn-hangzhou" \
       -e ALIYUN_ACCESS_KEY_ID="your-access-key-id" \
       -e ALIYUN_ACCESS_KEY_SECRET="your-access-key-secret" \
-      -e DOMAINS="example.com,sub.example.com" \
+      -e DOMAIN_ARG="-d example.com -d *.example.com" \
       -e EMAIL="your-email@example.com" \
       -e CHALLENGE_TYPE="dns" \
       -e CLOUD_PROVIDER="aliyun" \
@@ -291,7 +291,7 @@ docker-compose up -d
   - `ALIYUN_REGION`: 阿里云区域（如 cn-hangzhou）
   - `ALIYUN_ACCESS_KEY_ID`: 阿里云访问密钥 ID
   - `ALIYUN_ACCESS_KEY_SECRET`: 阿里云访问密钥 Secret
-  - `DOMAINS`: 域名列表，逗号分隔（如 example.com,sub.example.com）
+  - `DOMAIN_ARG`: 域名参数，格式为 `-d example.com -d *.example.com`
   - `EMAIL`: 证书所有者的电子邮件地址
   - `SERVERS`: 服务器列表，每行一个，格式为 `user@host`（例如：`root@example.com`）
   - `SSH_PRIVATE_KEY`: SSH 私钥（完整内容，包括开头和结尾行）
@@ -559,7 +559,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
   - 不要将证书复制到不必要的位置
   - 确保只有需要使用证书的服务能访问证书文件
 
-## 7. 附录：域名处理逻辑
+## 7. 附录：域名参数格式
 
 X Certbot 现在将域名处理权完全交给用户，不再自动处理域名格式。用户需要直接提供完整的域名参数：
 

@@ -359,31 +359,25 @@ test_env_loading() {
     return 0
 }
 
-# 测试域名处理函数
-test_domain_processing() {
-    # 设置测试域名
-    export DOMAINS="example.com,sub.example.com"
+# 测试域名参数格式
+test_domain_arg_format() {
+    # 设置测试域名参数
+    export DOMAIN_ARG="-d example.com -d *.example.com"
     
-    # 运行域名处理函数
-    source ./test_domain_processor.sh
-    result=$(process_domains)
-    
-    # 验证结果
-    expected="-d example.com -d *.example.com -d sub.example.com"
-    if [ "$result" != "$expected" ]; then
-        echo "域名处理测试失败"
-        echo "期望: $expected"
-        echo "实际: $result"
+    # 验证域名参数格式
+    if [[ ! "$DOMAIN_ARG" =~ "-d " ]]; then
+        echo "域名参数格式测试失败"
+        echo "DOMAIN_ARG 应包含 '-d ' 格式"
         return 1
     fi
     
-    echo "域名处理测试通过"
+    echo "域名参数格式测试通过"
     return 0
 }
 
 # 运行测试
 test_env_loading
-test_domain_processing
+test_domain_arg_format
 ```
 
 ## 6. 持续集成/持续部署
@@ -525,7 +519,7 @@ jobs:
 | ALIYUN_REGION | Secret | 阿里云区域 |
 | ALIYUN_ACCESS_KEY_ID | Secret | 阿里云访问密钥 ID |
 | ALIYUN_ACCESS_KEY_SECRET | Secret | 阿里云访问密钥 Secret |
-| DOMAINS | Secret | 域名列表，逗号分隔 |
+| DOMAIN_ARG | Secret | 域名参数，格式为 `-d example.com -d *.example.com` |
 | EMAIL | Secret | 证书所有者的电子邮件地址 |
 | SERVER_HOST | Secret | 目标服务器 IP 或域名 |
 | SERVER_USERNAME | Secret | SSH 用户名 |
@@ -964,6 +958,55 @@ fi
 
 #### 8.8.3 函数说明
 
+##### get_main_domain
+
+从子域名中提取主域名。
+
+**参数**：
+- `$1`：域名（如 sub.example.com）
+
+**功能**：
+- 处理普通域名（如 example.com）
+- 处理特殊中文 TLD（如 example.com.cn）
+- 使用正则表达式和 grep 提取主域名部分
+
+**返回值**：
+提取的主域名（如 example.com 或 example.com.cn）
+
+**示例**：
+```bash
+main_domain=$(get_main_domain "sub.example.com")
+# 结果: example.com
+
+special_domain=$(get_main_domain "sub.example.com.cn")
+# 结果: example.com.cn
+```
+
+##### get_subdomain_prefix
+
+获取子域名前缀。
+
+**参数**：
+- `$1`：完整域名
+- `$2`：主域名
+
+**功能**：
+- 如果完整域名与主域名相同，返回 "@"（表示根域名）
+- 否则，从完整域名中移除主域名部分，返回前缀
+
+**返回值**：
+- 如果是主域名，返回 "@"
+- 如果是子域名，返回前缀部分
+
+**示例**：
+```bash
+prefix1=$(get_subdomain_prefix "example.com" "example.com")
+# 结果: @
+
+prefix2=$(get_subdomain_prefix "sub.example.com" "example.com")
+# 结果: sub
+```
+
 ##### verify_dns_record
 
 验证 DNS 记录是否已正确传播。
@@ -973,6 +1016,13 @@ fi
 - `$2`：期望的验证值
 - `$3`：最大尝试次数（默认为 3）
 - `$4`：每次尝试之间的等待时间（默认为 20 秒）
+
+**功能**：
+- 输出详细的验证过程日志
+- 首先使用默认 DNS 服务器查询 TXT 记录
+- 如果默认查询失败，尝试使用多个公共 DNS 服务器（8.8.8.8、1.1.1.1、114.114.114.114）进行查询
+- 在每次尝试之间等待指定的时间
+- 即使验证失败，也会继续让 Certbot 尝试验证（返回非零但不退出脚本）
 
 **返回值**：
 - `0`：验证成功
@@ -986,11 +1036,17 @@ verify_dns_record "example.com" "validation_token" 3 20
 
 ##### calculate_verification_timing
 
-计算验证尝试次数和等待时间。
+计算验证尝试次数和等待时间，用于优化 DNS 验证过程。
 
 **参数**：
-- `$1`：总等待时间（秒）
+- `$1`：总等待时间（秒），通常来自 DNS_PROPAGATION_SECONDS 环境变量
 - `$2`：尝试次数（默认为 3）
+
+**计算逻辑**：
+- 将总等待时间分配为多次验证尝试
+- 每次等待时间 = 总时间 / (尝试次数 + 1)
+- 剩余等待时间 = 总时间 - (尝试次数 * 每次等待时间)
+- 这种分配方式确保在总等待时间内进行多次验证尝试，提高成功率
 
 **返回值**：
 空格分隔的三个值：尝试次数、每次等待时间、剩余等待时间
@@ -999,6 +1055,7 @@ verify_dns_record "example.com" "validation_token" 3 20
 
 ```bash
 read -r ATTEMPTS WAIT_TIME REMAINING_TIME <<< $(calculate_verification_timing 60 3)
+# 可能的结果：3 15 15（3次尝试，每次等待15秒，剩余15秒）
 ```
 
 #### 8.8.4 开发新的 DNS 验证脚本
@@ -1011,3 +1068,12 @@ read -r ATTEMPTS WAIT_TIME REMAINING_TIME <<< $(calculate_verification_timing 60
 4. 即使验证失败，也应继续等待剩余时间，让 Certbot 有机会验证
 
 这样可以确保所有 DNS 验证脚本具有一致的行为和可靠性。 
+
+export ALIYUN_REGION="cn-hangzhou"
+export ALIYUN_ACCESS_KEY_ID="your-access-key-id"
+export ALIYUN_ACCESS_KEY_SECRET="your-access-key-secret"
+export DOMAIN_ARG="-d example.com -d *.example.com"
+export EMAIL="your-email@example.com"
+
+# 直接使用 DOMAIN_ARG，不再需要处理域名
+echo "使用域名参数: $DOMAIN_ARG" 

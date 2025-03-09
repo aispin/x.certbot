@@ -206,8 +206,8 @@ ALIYUN_REGION=cn-hangzhou
 ALIYUN_ACCESS_KEY_ID=your-access-key-id
 ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
 
-# 域名列表，使用逗号分隔
-DOMAINS=example.com,sub.example.com
+# 域名参数，使用逗号分隔
+DOMAIN_ARG=-d example.com -d *.example.com
 
 # 证书所有者的电子邮件地址
 EMAIL=your-email@example.com
