@@ -4,7 +4,7 @@ FROM alpine:latest
 ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
 
 # Install dependencies
-RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl && \
+RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl bind-tools && \
     apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
 
 # Install aliyun-cli
@@ -108,7 +108,7 @@ ENV POST_RENEWAL_SCRIPT=""
 # 证书输出配置
 #---------------------------------
 # 证书输出目录
-ENV CERT_OUTPUT_DIR="/etc/letsencrypt/certs"
+ENV CERT_OUTPUT_DIR="/etc/letsencrypt/certs/live"
 # 是否为每个域名创建单独的子目录
 ENV CREATE_DOMAIN_DIRS="true"
 # 是否创建证书元数据文件

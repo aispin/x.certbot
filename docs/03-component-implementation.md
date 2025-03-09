@@ -9,321 +9,89 @@
 ### 功能实现
 
 1. **环境变量加载**:
-```bash
-# 加载环境变量从 .env 文件（如果存在）
-if [ -f "/.env" ]; then
-    echo "Loading environment variables from /.env file"
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-        # 跳过注释和空行
-        [[ $key =~ ^#.*$ ]] || [ -z "$key" ] && continue
-        # 移除首尾空白
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | xargs)
-        # 仅在命令行未设置时设置
-        if [ -z "${!key}" ]; then
-            export "$key"="$value"
-            echo "Set $key from .env file"
-        else
-            echo "$key already set, using existing value"
-        fi
-    done < /.env
-fi
-```
+   - 从 `/.env` 文件加载环境变量（如果存在）
+   - 跳过注释和空行，移除首尾空白
+   - 仅在命令行未设置时设置环境变量
+   - 详细实现见 `entrypoint.sh` 文件
 
 2. **环境变量检查**:
-```bash
-# 检查必需的环境变量
-if [ -z "$ALIYUN_REGION" ] || [ -z "$ALIYUN_ACCESS_KEY_ID" ] || [ -z "$ALIYUN_ACCESS_KEY_SECRET" ] || [ -z "$DOMAIN_ARG" ] || [ -z "$EMAIL" ]; then
-    echo "Error: Missing required environment variables. Please set: ALIYUN_REGION, ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET, DOMAIN_ARG, EMAIL"
-    exit 1
-fi
-```
+   - 检查必需的环境变量是否已设置
+   - 如果缺少必要变量，显示错误信息并退出
+   - 详细实现见 `entrypoint.sh` 文件
 
-3. **Aliyun CLI 配置**:
-```bash
-# 配置 Aliyun CLI
-aliyun configure set --profile akProfile --mode AK --region $ALIYUN_REGION --access-key-id $ALIYUN_ACCESS_KEY_ID --access-key-secret $ALIYUN_ACCESS_KEY_SECRET
-```
+3. **云服务提供商 CLI 配置**:
+   - 根据环境变量配置云服务提供商的 CLI 工具
+   - 支持阿里云和腾讯云
+   - 详细实现见 `entrypoint.sh` 文件
 
 4. **证书续期处理**:
-```bash
-# 主执行流程
-if [ "$1" == "renew" ]; then
-    echo "Renewing certificates using $CHALLENGE_TYPE challenge with $CLOUD_PROVIDER provider..."
-    
-    certbot_args="--manual --preferred-challenges $CHALLENGE_TYPE \
-        --manual-auth-hook \"$AUTH_HOOK\" \
-        --manual-cleanup-hook \"$CLEANUP_HOOK\" \
-        --agree-tos --email $EMAIL \
-        --deploy-hook \"$DEPLOY_HOOK\""
-    
-    if [ "$CHALLENGE_TYPE" == "dns" ]; then
-        # DNS specific arguments
-        export DNS_PROPAGATION_SECONDS
-    fi
-    
-    eval "certbot renew $certbot_args"
-    
-    exit $?
-fi
-```
+   - 当以 `renew` 参数运行时执行
+   - 根据 `CHALLENGE_TYPE` 和 `CLOUD_PROVIDER` 选择适当的验证钩子
+   - 调用 certbot 执行证书续期
+   - 详细实现见 `entrypoint.sh` 文件
 
 5. **证书申请处理**:
-```bash
-# 直接使用 DOMAIN_ARG 参数，不再需要处理域名
-certbot certonly $DOMAIN_ARG \
-    --manual \
-    --preferred-challenges dns \
-    --manual-auth-hook /path/to/auth-hook.sh \
-    --manual-cleanup-hook /path/to/cleanup-hook.sh \
-    --agree-tos \
-    --email $EMAIL \
-    --non-interactive
-```
+   - 直接使用 `DOMAIN_ARG` 参数指定域名
+   - 配置手动验证方式和钩子脚本
+   - 调用 certbot 执行证书申请
+   - 详细实现见 `entrypoint.sh` 文件
 
 6. **启动 Cron 服务**:
-```bash
-# 启动 cron 守护进程
-crond -f -l 2
-```
+   - 启动 cron 守护进程以定期执行证书续期
+   - 详细实现见 `entrypoint.sh` 文件
 
-## 2. DNS 验证脚本 (plugins/dns/aliyun.sh)
+## 2. DNS 验证脚本 (plugins/dns/)
 
 DNS 验证脚本是处理 Certbot DNS-01 挑战的关键组件，负责添加和删除 DNS TXT 记录。
 
 ### 功能实现
 
 1. **环境准备**:
-```bash
-#!/bin/bash
-
-# 激活 Python 虚拟环境
-source /opt/venv/bin/activate
-
-# 设置默认值
-PROFILE="akProfile"
-DOMAIN=""
-RECORD="_acme-challenge"
-VALUE=""
-ACTION="add"
-# 默认 DNS 传播等待时间（秒）
-DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
-```
+   - 激活 Python 虚拟环境
+   - 设置默认参数和环境变量
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
 2. **命令行参数处理**:
-```bash
-# 解析命令行参数
-if [ "$1" == "clean" ]; then
-    ACTION="delete"
-    shift
-fi
-
-# 从环境变量获取域名和验证值
-if [ -n "$CERTBOT_DOMAIN" ]; then
-    DOMAIN="$CERTBOT_DOMAIN"
-fi
-
-if [ -n "$CERTBOT_VALIDATION" ]; then
-    VALUE="$CERTBOT_VALIDATION"
-fi
-```
+   - 解析命令行参数，确定是添加还是删除记录
+   - 从环境变量获取域名和验证值
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
 3. **DNS 辅助函数**:
-```bash
-# 函数用于从子域名提取主域名
-get_main_domain() {
-    local domain=$1
-    
-    # 处理特殊中文 TLD，如 .com.cn, .net.cn 等
-    if [[ "$domain" =~ .*\.(com|net|org|gov|edu)\.(cn|hk|tw)$ ]]; then
-        echo "$domain" | grep -o '[^.]*\.[^.]*\.[^.]*$'
-    else
-        echo "$domain" | grep -o '[^.]*\.[^.]*$'
-    fi
-}
-
-# 函数用于获取子域名前缀
-get_subdomain_prefix() {
-    local domain=$1
-    local main_domain=$2
-    
-    if [ "$domain" == "$main_domain" ]; then
-        echo "@"
-    else
-        echo "${domain%.$main_domain}"
-    fi
-}
-
-# 函数用于验证 DNS 记录传播
-verify_dns_record() {
-    local domain=$1
-    local expected_value=$2
-    local max_attempts=${3:-3}
-    local wait_time=${4:-20}
-    
-    echo "验证 DNS 记录传播情况..."
-    echo "域名: _acme-challenge.$domain"
-    echo "预期值: $expected_value"
-    
-    # 初始等待，给 DNS 一些传播时间
-    sleep $wait_time
-    
-    for attempt in $(seq 1 $max_attempts); do
-        echo "尝试 $attempt/$max_attempts 验证 DNS 记录..."
-        
-        # 使用 dig 查询 TXT 记录
-        TXT_RECORD=$(dig +short TXT _acme-challenge.$domain)
-        echo "查询结果: $TXT_RECORD"
-        
-        if [[ "$TXT_RECORD" == *"$expected_value"* ]]; then
-            echo "✅ DNS 验证成功: 找到匹配的 TXT 记录"
-            return 0
-        else
-            echo "⚠️ 警告: 未找到匹配的 TXT 记录，继续尝试..."
-            
-            # 使用多个 DNS 服务器查询
-            echo "尝试使用其他 DNS 服务器查询..."
-            for dns_server in 8.8.8.8 1.1.1.1 114.114.114.114; do
-                echo "使用 DNS 服务器 $dns_server 查询:"
-                OTHER_RESULT=$(dig @$dns_server +short TXT _acme-challenge.$domain)
-                echo "结果: $OTHER_RESULT"
-                
-                if [[ "$OTHER_RESULT" == *"$expected_value"* ]]; then
-                    echo "✅ 使用 $dns_server 验证成功"
-                    return 0
-                fi
-            done
-            
-            # 如果不是最后一次尝试，则等待后重试
-            if [ $attempt -lt $max_attempts ]; then
-                echo "等待 $wait_time 秒后重试..."
-                sleep $wait_time
-            fi
-        fi
-    done
-    
-    echo "⚠️ 警告: DNS 验证未成功，但将继续尝试 Let's Encrypt 验证"
-    echo "可能原因:"
-    echo "1. DNS 传播需要更长时间"
-    echo "2. DNS 记录未正确添加"
-    echo "3. DNS 服务器缓存问题"
-    echo "建议增加 DNS_PROPAGATION_SECONDS 值或检查 DNS 配置"
-    
-    # 返回非零但不退出脚本，让 Certbot 继续尝试验证
-    return 1
-}
-
-# 函数用于计算验证时间
-calculate_verification_timing() {
-    local total_time=$1
-    local attempts=${2:-3}
-    
-    # 计算每次验证之间的等待时间
-    local wait_time=$((total_time / (attempts + 1)))
-    
-    # 计算剩余等待时间
-    local remaining_time=$((total_time - attempts * wait_time))
-    
-    # 返回结果
-    echo "$attempts $wait_time $remaining_time"
-}
-```
+   - 从子域名提取主域名
+   - 获取子域名前缀
+   - 详细实现见 `plugins/dns/helper.sh` 文件
 
 4. **域名解析**:
-```bash
-# 主域名提取
-MAIN_DOMAIN=$(get_main_domain "$DOMAIN")
-SUBDOMAIN_PREFIX=$(get_subdomain_prefix "$DOMAIN" "$MAIN_DOMAIN")
-
-# 构造完整记录名
-if [ "$SUBDOMAIN_PREFIX" == "@" ]; then
-    FULL_RECORD_NAME="$RECORD"
-else
-    FULL_RECORD_NAME="$RECORD.$SUBDOMAIN_PREFIX"
-fi
-```
+   - 提取主域名和子域名前缀
+   - 构造完整的 DNS 记录名
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
 5. **DNS 记录添加**:
-```bash
-# 执行 DNS 操作
-if [ "$ACTION" == "add" ]; then
-    # 添加 DNS 记录
-    echo "Adding DNS record..."
-    aliyun --profile "$PROFILE" alidns AddDomainRecord \
-        --DomainName "$MAIN_DOMAIN" \
-        --RR "$FULL_RECORD_NAME" \
-        --Type "TXT" \
-        --Value "$VALUE" \
-        --TTL 600
-    
-    # 等待 DNS 传播
-    echo "Waiting for DNS propagation (${DNS_PROPAGATION_SECONDS} seconds)..."
-    sleep $DNS_PROPAGATION_SECONDS
-```
+   - 调用云服务提供商 API 添加 TXT 记录
+   - 等待 DNS 传播完成
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
 6. **DNS 记录删除**:
-```bash
-elif [ "$ACTION" == "delete" ]; then
-    # 查找记录 ID
-    echo "Finding record ID..."
-    RECORD_ID=$(aliyun --profile "$PROFILE" alidns DescribeDomainRecords \
-        --DomainName "$MAIN_DOMAIN" \
-        --RRKeyWord "$FULL_RECORD_NAME" \
-        --Type "TXT" \
-        --ValueKeyWord "$VALUE" \
-        | jq -r '.DomainRecords.Record[0].RecordId')
-    
-    if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-        # 删除记录
-        echo "Deleting record ID: $RECORD_ID"
-        aliyun --profile "$PROFILE" alidns DeleteDomainRecord \
-            --RecordId "$RECORD_ID"
-    else
-        echo "Record not found, nothing to delete"
-    fi
-fi
-```
+   - 查找要删除的记录 ID
+   - 调用云服务提供商 API 删除 TXT 记录
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
-## 3. 证书部署脚本 (deploy-hook.sh)
+## 3. 证书部署脚本 (scripts/deploy-hook.sh)
 
 证书部署脚本负责在证书成功续期后将其部署到指定位置并执行相关操作。
 
 ### 功能实现
 
 1. **证书复制**:
-```bash
-#!/bin/bash
-
-# 该脚本在证书成功续期后由 certbot 调用
-# $RENEWED_LINEAGE 包含续期证书的路径
-
-echo "Certificate renewal successful for $RENEWED_LINEAGE"
-
-# 如果不存在则创建目标目录
-mkdir -p /etc/letsencrypt/certs
-
-# 将所有证书文件复制到 certs 目录
-echo "Copying certificates from $RENEWED_LINEAGE to /etc/letsencrypt/certs"
-cp -L "$RENEWED_LINEAGE/fullchain.pem" "/etc/letsencrypt/certs/"
-cp -L "$RENEWED_LINEAGE/privkey.pem" "/etc/letsencrypt/certs/"
-cp -L "$RENEWED_LINEAGE/cert.pem" "/etc/letsencrypt/certs/"
-cp -L "$RENEWED_LINEAGE/chain.pem" "/etc/letsencrypt/certs/"
-
-# 设置适当的权限
-chmod 644 /etc/letsencrypt/certs/*.pem
-```
+   - 创建目标目录（如果不存在）
+   - 将证书文件复制到指定位置
+   - 设置适当的文件权限
+   - 详细实现见 `scripts/deploy-hook.sh` 文件
 
 2. **执行宿主机脚本**:
-```bash
-# 如果存在且可执行则执行宿主机脚本
-if [ -f "/host-scripts/post-renewal.sh" ] && [ -x "/host-scripts/post-renewal.sh" ]; then
-    echo "Executing host post-renewal script..."
-    /host-scripts/post-renewal.sh
-    echo "Host post-renewal script executed with exit code: $?"
-else
-    echo "No executable host post-renewal script found at /host-scripts/post-renewal.sh"
-fi
-```
+   - 检查宿主机脚本是否存在且可执行
+   - 执行宿主机脚本并记录退出码
+   - 详细实现见 `scripts/deploy-hook.sh` 文件
 
 ## 4. Dockerfile 实现
 
@@ -332,77 +100,39 @@ Dockerfile 定义了容器的构建过程，包括依赖安装、脚本配置和
 ### 主要实现
 
 1. **基础镜像与依赖**:
-```dockerfile
-FROM alpine:latest
+   - 使用 Alpine Linux 作为基础镜像
+   - 安装必要的软件包和依赖
+   - 包含 `bind-tools` 包，提供 `dig` 命令用于 DNS 验证
+   - 详细实现见 `Dockerfile` 文件
 
-# 安装依赖
-RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq && \
-    apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
-```
-
-2. **安装 Aliyun CLI**:
-```dockerfile
-# 安装 aliyun-cli
-RUN wget https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz && \
-    tar xzvf aliyun-cli-linux-latest-amd64.tgz && \
-    mv aliyun /usr/local/bin && \
-    rm aliyun-cli-linux-latest-amd64.tgz
-```
+2. **安装云服务提供商 CLI**:
+   - 下载并安装阿里云 CLI
+   - 配置腾讯云 CLI
+   - 详细实现见 `Dockerfile` 文件
 
 3. **复制脚本**:
-```dockerfile
-# 创建脚本目录
-RUN mkdir -p /usr/local/bin/scripts /usr/local/bin/plugins/dns /usr/local/bin/plugins/http
-
-# 复制脚本
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/deploy-hook.sh /usr/local/bin/scripts/deploy-hook.sh
-COPY plugins/dns/ /usr/local/bin/plugins/dns/
-COPY plugins/http/ /usr/local/bin/plugins/http/
-
-# 设置执行权限
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/scripts/deploy-hook.sh && \
-    chmod +x /usr/local/bin/plugins/dns/*.sh /usr/local/bin/plugins/http/*.sh
-```
+   - 创建脚本目录结构
+   - 复制入口脚本、部署脚本和验证插件
+   - 设置执行权限
+   - 详细实现见 `Dockerfile` 文件
 
 4. **Python 环境配置**:
-```dockerfile
-# 为 Python 包创建虚拟环境
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# 在虚拟环境中安装 Python 依赖
-RUN pip install --upgrade pip && \
-    pip install aliyun-python-sdk-core aliyun-python-sdk-alidns
-```
+   - 创建 Python 虚拟环境
+   - 安装云服务提供商 SDK
+   - 详细实现见 `Dockerfile` 文件
 
 5. **环境变量设置**:
-```dockerfile
-# 设置环境变量（运行时提供）
-ENV ALIYUN_REGION=""
-ENV ALIYUN_ACCESS_KEY_ID=""
-ENV ALIYUN_ACCESS_KEY_SECRET=""
-# 域名参数（格式 -d example.com -d *.domain.com）
-ENV DOMAIN_ARG=""
-ENV EMAIL=""
-ENV CRON_SCHEDULE="0 0 * * 1,4"
-# DNS 传播等待时间（秒）
-ENV DNS_PROPAGATION_SECONDS="60"
-```
+   - 设置默认环境变量
+   - 配置 DNS 传播等待时间
+   - 详细实现见 `Dockerfile` 文件
 
 6. **Cron 配置**:
-```dockerfile
-# 设置 certbot renew 的 cron 任务
-RUN echo "$CRON_SCHEDULE /usr/local/bin/entrypoint.sh renew" > /etc/crontabs/root
-```
+   - 设置 certbot 续期的 cron 任务
+   - 详细实现见 `Dockerfile` 文件
 
 7. **入口点设置**:
-```dockerfile
-# 确保 cron 运行
-RUN touch /var/log/cron.log
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-```
+   - 配置容器入口点
+   - 详细实现见 `Dockerfile` 文件
 
 ## 5. Docker 容器运行配置
 
@@ -418,7 +148,7 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 2. **配置验证**：
    - 验证必要的环境变量是否已设置
-   - 配置阿里云 CLI 工具
+   - 配置云服务提供商 CLI 工具
 
 3. **证书处理流程**：
    - 如果是首次运行，执行证书申请流程
@@ -431,28 +161,7 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 ### 5.2 容器环境变量处理
 
-入口脚本中的环境变量处理逻辑：
-
-```bash
-# 加载环境变量从 .env 文件（如果存在）
-if [ -f "/.env" ]; then
-    echo "Loading environment variables from /.env file"
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-        # 跳过注释和空行
-        [[ $key =~ ^#.*$ ]] || [ -z "$key" ] && continue
-        # 移除首尾空白
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | xargs)
-        # 仅在命令行未设置时设置
-        if [ -z "${!key}" ]; then
-            export "$key"="$value"
-            echo "Set $key from .env file"
-        else
-            echo "$key already set, using existing value"
-        fi
-    done < /.env
-fi
-```
+入口脚本中实现了环境变量处理逻辑，支持从 `.env` 文件加载变量，并尊重命令行传入的变量优先级。详细实现见 `entrypoint.sh` 文件。
 
 ### 5.3 技术实现要点
 
@@ -476,14 +185,17 @@ fi
 1. **入口脚本错误处理**:
    - 检查必需环境变量是否设置
    - 捕获和传递 certbot 命令的退出码
+   - 详细实现见 `entrypoint.sh` 文件
 
 2. **DNS 脚本错误处理**:
    - 在添加和删除 DNS 记录时进行错误检查
    - 记录详细的操作日志
+   - 详细实现见 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件
 
 3. **部署钩子错误处理**:
    - 记录宿主机脚本的执行结果和退出码
    - 确保目录存在和权限正确
+   - 详细实现见 `scripts/deploy-hook.sh` 文件
 
 4. **容器日志**:
    - 所有脚本输出都会记录到 Docker 日志

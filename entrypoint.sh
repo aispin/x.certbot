@@ -1,6 +1,23 @@
 #!/bin/bash
 
-# 加载控制台工具
+# X Certbot 入口脚本
+# 用途: 作为容器的主入口点，处理证书申请、续期和自动化流程
+# 功能: 
+#   1. 加载环境变量和配置
+#   2. 配置云服务提供商 CLI 工具
+#   3. 处理证书申请和续期
+#   4. 管理验证钩子和部署钩子
+#   5. 启动 cron 服务进行自动续期
+# 环境变量:
+#   DOMAIN_ARG - 域名参数，格式为 "-d example.com -d *.example.com"
+#   EMAIL - 证书所有者的电子邮件地址
+#   CHALLENGE_TYPE - 验证类型，可选值: dns, http (默认: dns)
+#   CLOUD_PROVIDER - 云服务提供商，可选值: aliyun, tencentcloud (默认: aliyun)
+#   DNS_PROPAGATION_SECONDS - DNS 传播等待时间 (默认: 60秒)
+#   CRON_SCHEDULE - 证书续期的 cron 计划 (默认: "0 0 * * 1,4")
+#   DEBUG - 设置为 true 启用调试输出
+
+# 加载控制台工具 (用于美化输出和日志记录)
 if [ -f "/usr/local/bin/scripts/console_utils.sh" ]; then
     source /usr/local/bin/scripts/console_utils.sh
 fi
@@ -9,16 +26,18 @@ fi
 print_header "Let's Encrypt 证书自动化工具"
 print_info "开始执行证书管理流程..."
 
-# Load environment variables from .env file if it exists
+# 从 .env 文件加载环境变量 (如果存在)
+# 这允许用户通过挂载 .env 文件来配置容器，而不是通过命令行参数
 if [ -f "/.env" ]; then
     print_env "从 /.env 文件加载环境变量"
     while IFS='=' read -r key value || [ -n "$key" ]; do
-        # Skip comments and empty lines
+        # 跳过注释和空行
         [[ $key =~ ^#.*$ ]] || [ -z "$key" ] && continue
-        # Remove leading/trailing whitespace
+        # 移除首尾空白
         key=$(echo "$key" | xargs)
         value=$(echo "$value" | xargs)
-        # Only set if not already set from command line
+        # 仅在命令行未设置时设置
+        # 这确保命令行参数优先级高于 .env 文件
         if [ -z "${!key}" ]; then
             export "$key"="$value"
             print_env "设置变量: $key"
@@ -28,21 +47,26 @@ if [ -f "/.env" ]; then
     done < /.env
 fi
 
-# Activate the virtual environment
+# 激活 Python 虚拟环境
+# 这是为了使用 Python 依赖，如云服务提供商 SDK
 source /opt/venv/bin/activate
 print_success "已激活 Python 虚拟环境"
 
-# Check required environment variables
+# 检查必需的环境变量
+# 没有这些变量，脚本无法正常工作
 if [ -z "$DOMAIN_ARG" ] || [ -z "$EMAIL" ]; then
     print_error "缺少必需的环境变量。请设置: DOMAIN_ARG, EMAIL"
     exit 1
 fi
 
-# Set default values
-CHALLENGE_TYPE=${CHALLENGE_TYPE:-"dns"}
-CLOUD_PROVIDER=${CLOUD_PROVIDER:-"aliyun"}
-DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
+# 设置默认值
+# 如果未通过环境变量指定，则使用这些默认值
+CHALLENGE_TYPE=${CHALLENGE_TYPE:-"dns"}  # 默认使用 DNS 验证
+CLOUD_PROVIDER=${CLOUD_PROVIDER:-"aliyun"}  # 默认使用阿里云
+DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}  # 默认 DNS 传播等待时间
 
+# 显示配置信息
+# 这有助于用户了解当前的配置状态
 print_subheader "配置信息"
 print_key_value "域名参数" "$DOMAIN_ARG"
 print_key_value "邮箱" "$EMAIL"

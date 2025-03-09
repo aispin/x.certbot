@@ -909,171 +909,53 @@ exit 0
 
 为了提高代码复用性和维护性，项目提供了 `plugins/dns/helper.sh` 辅助脚本，其中包含了常用的 DNS 验证函数。这些函数可以被各个 DNS 提供商的脚本共享使用。
 
+> **重要**: DNS 验证脚本依赖于 `dig` 命令进行 DNS 查询，该命令包含在 Alpine Linux 的 `bind-tools` 包中。确保在 Dockerfile 中包含此依赖，否则会出现 `dig: command not found` 错误。
+
 #### 8.8.1 主要功能
 
 `helper.sh` 提供以下主要功能：
 
 1. **域名处理函数**：
-   - `get_main_domain`：从子域名中提取主域名
-   - `get_subdomain_prefix`：获取子域名前缀
-
-2. **DNS 验证函数**：
-   - `verify_dns_record`：验证 DNS 记录是否已正确传播
-   - `calculate_verification_timing`：计算验证尝试次数和等待时间
+   - `get_main_domain`：从子域名中提取主域名，支持特殊中文 TLD（如 .com.cn）
+   - `get_subdomain_prefix`：获取子域名前缀，对于主域名返回 "@"
 
 #### 8.8.2 使用方法
 
-在 DNS 验证脚本中引入 `helper.sh`：
+在 DNS 验证脚本中，您可以通过以下方式引入和使用 `helper.sh`：
 
-```bash
-# 引入辅助函数
-if [ -f "$(dirname "$0")/helper.sh" ]; then
-    source "$(dirname "$0")/helper.sh"
-else
-    echo "Warning: helper.sh not found, using built-in functions"
-fi
-```
+1. 在脚本开始处引入辅助函数
+2. 使用函数提取主域名和子域名前缀
+3. 构造完整的 DNS 记录名
+4. 等待 DNS 传播
 
-使用 `verify_dns_record` 函数验证 DNS 记录：
+详细实现可参考 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh` 文件。
 
-```bash
-# 计算验证尝试次数和等待时间
-if type calculate_verification_timing >/dev/null 2>&1; then
-    read -r VERIFY_ATTEMPTS VERIFY_WAIT_TIME REMAINING_WAIT_TIME <<< $(calculate_verification_timing $DNS_PROPAGATION_SECONDS 3)
-    echo "验证配置: $VERIFY_ATTEMPTS 次尝试, 每次等待 $VERIFY_WAIT_TIME 秒, 剩余等待 $REMAINING_WAIT_TIME 秒"
-fi
+#### 8.8.3 DNS 传播等待
 
-# 验证 DNS 记录
-if type verify_dns_record >/dev/null 2>&1; then
-    verify_dns_record "$DOMAIN" "$VALUE" $VERIFY_ATTEMPTS $VERIFY_WAIT_TIME
-    VERIFY_RESULT=$?
-    
-    if [ $VERIFY_RESULT -eq 0 ]; then
-        echo "DNS 验证成功，继续处理..."
-    else
-        echo "DNS 验证未成功，但将继续等待剩余时间..."
-    fi
-fi
-```
+在添加 DNS 记录后，需要等待一段时间让记录在 DNS 系统中传播。这个等待时间通过 `DNS_PROPAGATION_SECONDS` 环境变量控制，默认为 60 秒。
 
-#### 8.8.3 函数说明
+根据不同的 DNS 提供商，传播时间可能有所不同：
+- 大型提供商（如阿里云、腾讯云、Cloudflare）通常只需 60-120 秒
+- 中小型提供商可能需要 180-300 秒
+- 某些本地或特殊 DNS 提供商可能需要更长时间
 
-##### get_main_domain
-
-从子域名中提取主域名。
-
-**参数**：
-- `$1`：域名（如 sub.example.com）
-
-**功能**：
-- 处理普通域名（如 example.com）
-- 处理特殊中文 TLD（如 example.com.cn）
-- 使用正则表达式和 grep 提取主域名部分
-
-**返回值**：
-提取的主域名（如 example.com 或 example.com.cn）
-
-**示例**：
-```bash
-main_domain=$(get_main_domain "sub.example.com")
-# 结果: example.com
-
-special_domain=$(get_main_domain "sub.example.com.cn")
-# 结果: example.com.cn
-```
-
-##### get_subdomain_prefix
-
-获取子域名前缀。
-
-**参数**：
-- `$1`：完整域名
-- `$2`：主域名
-
-**功能**：
-- 如果完整域名与主域名相同，返回 "@"（表示根域名）
-- 否则，从完整域名中移除主域名部分，返回前缀
-
-**返回值**：
-- 如果是主域名，返回 "@"
-- 如果是子域名，返回前缀部分
-
-**示例**：
-```bash
-prefix1=$(get_subdomain_prefix "example.com" "example.com")
-# 结果: @
-
-prefix2=$(get_subdomain_prefix "sub.example.com" "example.com")
-# 结果: sub
-```
-
-##### verify_dns_record
-
-验证 DNS 记录是否已正确传播。
-
-**参数**：
-- `$1`：域名
-- `$2`：期望的验证值
-- `$3`：最大尝试次数（默认为 3）
-- `$4`：每次尝试之间的等待时间（默认为 20 秒）
-
-**功能**：
-- 输出详细的验证过程日志
-- 首先使用默认 DNS 服务器查询 TXT 记录
-- 如果默认查询失败，尝试使用多个公共 DNS 服务器（8.8.8.8、1.1.1.1、114.114.114.114）进行查询
-- 在每次尝试之间等待指定的时间
-- 即使验证失败，也会继续让 Certbot 尝试验证（返回非零但不退出脚本）
-
-**返回值**：
-- `0`：验证成功
-- `1`：验证失败
-
-**示例**：
-
-```bash
-verify_dns_record "example.com" "validation_token" 3 20
-```
-
-##### calculate_verification_timing
-
-计算验证尝试次数和等待时间，用于优化 DNS 验证过程。
-
-**参数**：
-- `$1`：总等待时间（秒），通常来自 DNS_PROPAGATION_SECONDS 环境变量
-- `$2`：尝试次数（默认为 3）
-
-**计算逻辑**：
-- 将总等待时间分配为多次验证尝试
-- 每次等待时间 = 总时间 / (尝试次数 + 1)
-- 剩余等待时间 = 总时间 - (尝试次数 * 每次等待时间)
-- 这种分配方式确保在总等待时间内进行多次验证尝试，提高成功率
-
-**返回值**：
-空格分隔的三个值：尝试次数、每次等待时间、剩余等待时间
-
-**示例**：
-
-```bash
-read -r ATTEMPTS WAIT_TIME REMAINING_TIME <<< $(calculate_verification_timing 60 3)
-# 可能的结果：3 15 15（3次尝试，每次等待15秒，剩余15秒）
-```
+如果验证失败，可以尝试增加 `DNS_PROPAGATION_SECONDS` 的值，可在 `.env` 文件或 Docker 运行命令中设置。
 
 #### 8.8.4 开发新的 DNS 验证脚本
 
-开发新的 DNS 验证脚本时，建议遵循以下步骤：
+如果您需要为其他 DNS 提供商开发验证脚本，可以参考以下步骤：
 
-1. 引入 `helper.sh` 辅助脚本
-2. 使用 `get_main_domain` 和 `get_subdomain_prefix` 函数处理域名
-3. 添加 DNS 记录后，使用 `verify_dns_record` 函数验证记录是否已传播
-4. 即使验证失败，也应继续等待剩余时间，让 Certbot 有机会验证
+1. 创建新的脚本文件，例如 `plugins/dns/your-provider.sh`
+2. 实现以下功能：
+   - 解析命令行参数和环境变量
+   - 提取主域名和子域名前缀（使用 helper.sh 中的函数）
+   - 添加 DNS TXT 记录
+   - 等待 DNS 传播
+   - 删除 DNS TXT 记录（清理操作）
 
-这样可以确保所有 DNS 验证脚本具有一致的行为和可靠性。 
+3. 确保脚本具有执行权限：
+   ```bash
+   chmod +x plugins/dns/your-provider.sh
+   ```
 
-export ALIYUN_REGION="cn-hangzhou"
-export ALIYUN_ACCESS_KEY_ID="your-access-key-id"
-export ALIYUN_ACCESS_KEY_SECRET="your-access-key-secret"
-export DOMAIN_ARG="-d example.com -d *.example.com"
-export EMAIL="your-email@example.com"
-
-# 直接使用 DOMAIN_ARG，不再需要处理域名
-echo "使用域名参数: $DOMAIN_ARG" 
+详细的实现示例可参考现有的 DNS 验证脚本，如 `plugins/dns/aliyun.sh` 和 `plugins/dns/tencentcloud.sh`。

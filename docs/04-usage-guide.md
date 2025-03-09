@@ -409,11 +409,53 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 
 **解决方案**：
 
-- 增加 DNS_PROPAGATION_SECONDS 值（如 120 或 180）
-- 检查阿里云 DNS 记录是否正确添加
-- 确认阿里云 API 权限是否足够
+- **增加 DNS_PROPAGATION_SECONDS 值**：
+  ```bash
+  # 在 .env 文件中或 Docker 运行命令中设置
+  DNS_PROPAGATION_SECONDS=180  # 或更高，如 300
+  ```
+  
+  不同的 DNS 提供商传播速度不同：
+  - 大型提供商（如阿里云、腾讯云、Cloudflare）通常只需 60-120 秒
+  - 中小型提供商可能需要 180-300 秒
+  - 某些本地或特殊 DNS 提供商可能需要更长时间
 
-### 5.2 证书无法自动续期
+- **检查 DNS 记录是否正确添加**：
+  ```bash
+  # 使用 dig 命令查询 TXT 记录
+  dig +short TXT _acme-challenge.your-domain.com
+  
+  # 或使用多个 DNS 服务器查询
+  dig @8.8.8.8 +short TXT _acme-challenge.your-domain.com
+  dig @1.1.1.1 +short TXT _acme-challenge.your-domain.com
+  ```
+
+- **确认云服务商 API 权限是否足够**：
+  - 阿里云：确保 RAM 用户有 AliyunDNSFullAccess 权限
+  - 腾讯云：确保 CAM 用户有 QcloudDNSFullAccess 权限
+
+- **降低 DNS 记录的 TTL 值**：
+  如果您可以直接管理 DNS 记录，将 TTL 值设置得更低（如 60 秒）可以加快传播速度
+
+- **多域名处理策略**：
+  当处理大量域名时，考虑将域名分组，每组不超过 5 个域名，分别获取证书
+
+### 5.2 "dig: command not found" 错误
+
+**问题**：运行容器时出现以下错误：
+```
+/usr/local/bin/plugins/dns/helper.sh: line 48: dig: command not found
+```
+
+**解决方案**：
+- 这个错误表明容器中缺少 `dig` 命令，该命令用于 DNS 查询和验证
+- 确保在 Dockerfile 中添加了 `bind-tools` 包：
+  ```dockerfile
+  RUN apk --no-cache add ... bind-tools ...
+  ```
+- 如果使用预构建镜像，请确保使用最新版本，或者自行构建包含 `bind-tools` 的镜像
+
+### 5.3 证书无法自动续期
 
 **问题**：证书到期但没有自动续期。
 
@@ -422,7 +464,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 无 Docker 环境：检查 cron 任务是否正确设置
 - 查看日志文件排查具体错误
 
-### 5.3 权限问题
+### 5.4 权限问题
 
 **问题**：无法写入证书文件或执行脚本。
 
@@ -431,7 +473,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 确保运行用户有足够权限
 - 使用 sudo 运行命令（无 Docker 环境）
 
-### 5.4 GitHub Actions 连接失败
+### 5.5 GitHub Actions 连接失败
 
 **问题**：GitHub Actions 无法连接到目标服务器。
 
@@ -442,7 +484,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 检查目标服务器的 SSH 设置是否允许密钥认证
 - 如果某台服务器连接失败，工作流会继续尝试其他服务器，检查日志以确定哪台服务器有问题
 
-#### 5.4.1 多服务器部署问题
+#### 5.5.1 多服务器部署问题
 
 **问题**：只有部分服务器成功部署证书。
 
@@ -452,7 +494,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 验证每台服务器的用户是否有权限创建/写入 `CERT_DIR` 目录
 - 对于执行 `CERT_UPDATED_HOOK_CMD` 失败的服务器，确认用户是否有足够权限执行该命令
 
-#### 5.4.2 GitHub Actions 中的日志输出处理
+#### 5.5.2 GitHub Actions 中的日志输出处理
 
 **说明**：虽然 X Certbot 不再将日志输出重定向到 stderr，但在 GitHub Actions 中仍建议使用特殊的日志处理方式，以便更好地管理和查看输出。
 
@@ -493,7 +535,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 2. 只有在容器实际执行失败时才会显示错误
 3. 使用 GitHub Actions 的特殊日志命令来控制日志的显示级别
 
-### 5.5 如何在 CI/CD 管道中使用？
+### 5.6 如何在 CI/CD 管道中使用？
 
 在 CI/CD 管道中，通常希望容器执行任务后自动退出。确保设置：
 - `CRON_ENABLED=false`
@@ -501,7 +543,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 
 这样容器会在证书操作完成后自动退出，不会阻塞 CI/CD 流程。
 
-### 5.6 如何使用外部验证脚本？
+### 5.7 如何使用外部验证脚本？
 
 设置环境变量 `AUTH_HOOK` 和 `CLEANUP_HOOK` 指向你的自定义脚本：
 
@@ -516,11 +558,11 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 -v /host/scripts/path:/path/to/custom
 ```
 
-### 5.7 如何同时支持 HTTP 和 DNS 验证？
+### 5.8 如何同时支持 HTTP 和 DNS 验证？
 
 目前每个容器实例只能使用一种验证方式。如果需要同时支持两种方式，可以运行两个不同配置的容器实例。
 
-### 5.8 如何在证书更新后重启 Web 服务器？
+### 5.9 如何在证书更新后重启 Web 服务器？
 
 有两种方法：
 
@@ -634,7 +676,7 @@ DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com -d another.com"
 
 | 环境变量 | 必选 | 默认值 | 描述 |
 |----------|------|-------|------|
-| DNS_PROPAGATION_SECONDS | 否 | 60 | DNS 记录传播等待时间（秒） |
+| DNS_PROPAGATION_SECONDS | 否 | 60 | DNS 记录传播等待时间（秒）。根据您的 DNS 提供商不同，可能需要调整此值。大型提供商（如阿里云、腾讯云）通常只需 60-120 秒，而某些小型或本地 DNS 提供商可能需要 180-300 秒。如果验证失败，请尝试增加此值。 |
 
 ### 8.7 钩子脚本配置
 
@@ -649,7 +691,7 @@ DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com -d another.com"
 
 | 环境变量 | 必选 | 默认值 | 描述 |
 |----------|------|-------|------|
-| CERT_OUTPUT_DIR | 否 | /etc/letsencrypt/certs | 证书输出目录 |
+| CERT_OUTPUT_DIR | 否 | /etc/letsencrypt/certs/live | 证书输出目录 |
 | CREATE_DOMAIN_DIRS | 否 | true | 是否为每个域名创建单独的子目录 |
 | CREATE_METADATA | 否 | true | 是否创建证书元数据文件 |
 | CERT_FILE_PERMISSIONS | 否 | 644 | 证书文件权限 |
@@ -672,7 +714,7 @@ DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com -d another.com"
 
 #### 验证钩子 (Auth Hook)
 
-验证钩子脚本用于处理域名所有权验证。自定义脚本需接受以下环境变量：
+验证钩子脚本用于处理域名所有权验证，需要在脚本中调用 DNS 服务商的 API 创建 TXT 记录（键为 _acme-challenge.${CERTBOT_DOMAIN}，值为 ${CERTBOT_VALIDATION})。自定义脚本需接受以下环境变量：
 - `CERTBOT_DOMAIN`: 当前正在验证的域名
 - `CERTBOT_VALIDATION`: Let's Encrypt 提供的验证值
 
@@ -680,7 +722,7 @@ DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com -d another.com"
 
 #### 清理钩子 (Cleanup Hook)
 
-清理钩子脚本用于清理验证完成后的资源。自定义脚本应接受 `clean` 参数：
+清理钩子脚本用于清理 DNS 验证完成后的资源。自定义脚本应接受 `clean` 参数：
 
 ```bash
 your-cleanup-script.sh clean

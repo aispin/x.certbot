@@ -1,18 +1,27 @@
 #!/bin/bash
 
-# This script is used by certbot for DNS-01 challenge with Aliyun DNS
-# It can be used as both auth and cleanup hook
+# 阿里云 DNS 验证脚本
+# 用途: 用于 Let's Encrypt DNS-01 验证挑战的阿里云 DNS 实现
+# 功能: 
+#   1. 添加 DNS TXT 记录 (_acme-challenge) - 不带参数执行
+#   2. 删除 DNS TXT 记录 - 带 clean 参数执行
+# 环境变量:
+#   CERTBOT_DOMAIN - 要验证的域名
+#   CERTBOT_VALIDATION - 验证值
+#   DNS_PROPAGATION_SECONDS - DNS 传播等待时间 (默认: 60秒)
+#   DEBUG - 设置为 true 启用调试输出
 
-# 加载控制台工具
+# 加载控制台工具 (如果存在)
 if [ -f "/usr/local/bin/scripts/console_utils.sh" ]; then
     source "/usr/local/bin/scripts/console_utils.sh"
 fi
 
-# Activate the virtual environment
+# 激活 Python 虚拟环境 (用于阿里云 SDK)
 source /opt/venv/bin/activate
 [ "$DEBUG" = "true" ] && print_debug "已激活 Python 虚拟环境"
 
-# Source the helper functions
+# 加载 DNS 辅助函数
+# 这些函数用于处理域名解析，如提取主域名和子域名前缀
 if [ -f "$(dirname "$0")/helper.sh" ]; then
     source "$(dirname "$0")/helper.sh"
     [ "$DEBUG" = "true" ] && print_debug "已加载 helper.sh"
@@ -20,22 +29,24 @@ else
     print_warning "helper.sh 未找到，使用内置函数"
 fi
 
-# Set default values
-PROFILE="akProfile"
-DOMAIN=""
-RECORD="_acme-challenge"
-VALUE=""
-ACTION="add"
-# Default DNS propagation wait time (in seconds)
+# 设置默认值
+PROFILE="akProfile"  # 阿里云 CLI 配置文件名
+DOMAIN=""            # 要验证的域名
+RECORD="_acme-challenge"  # DNS 验证记录名
+VALUE=""             # 验证值
+ACTION="add"         # 默认操作: 添加记录
+# DNS 传播等待时间 (秒)
+# 可通过环境变量自定义，适应不同 DNS 提供商的传播速度
 DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
 
-# Parse command line arguments
+# 解析命令行参数
+# 如果第一个参数是 "clean"，则设置操作为删除记录
 if [ "$1" == "clean" ]; then
     ACTION="delete"
     shift
 fi
 
-# Get domain and validation from environment variables
+# 从 Certbot 提供的环境变量获取域名和验证值
 if [ -n "$CERTBOT_DOMAIN" ]; then
     DOMAIN="$CERTBOT_DOMAIN"
 fi
@@ -44,7 +55,7 @@ if [ -n "$CERTBOT_VALIDATION" ]; then
     VALUE="$CERTBOT_VALIDATION"
 fi
 
-# Check if required variables are set
+# 检查必要的环境变量是否设置
 if [ -z "$DOMAIN" ] || [ -z "$VALUE" ]; then
     print_error "CERTBOT_DOMAIN 和 CERTBOT_VALIDATION 环境变量必须设置。"
     exit 1
@@ -115,36 +126,9 @@ if [ "$ACTION" == "add" ]; then
         exit 1
     fi
     
-    # 计算验证尝试次数和等待时间
-    if type calculate_verification_timing >/dev/null 2>&1; then
-        read -r VERIFY_ATTEMPTS VERIFY_WAIT_TIME REMAINING_WAIT_TIME <<< $(calculate_verification_timing $DNS_PROPAGATION_SECONDS 3)
-        print_info "验证配置: $VERIFY_ATTEMPTS 次尝试, 每次等待 $VERIFY_WAIT_TIME 秒, 剩余等待 $REMAINING_WAIT_TIME 秒"
-    else
-        VERIFY_ATTEMPTS=3
-        VERIFY_WAIT_TIME=$((DNS_PROPAGATION_SECONDS / 4))
-        REMAINING_WAIT_TIME=$((DNS_PROPAGATION_SECONDS - VERIFY_ATTEMPTS * VERIFY_WAIT_TIME))
-    fi
-    
-    # 验证 DNS 记录
-    if type verify_dns_record >/dev/null 2>&1; then
-        verify_dns_record "$DOMAIN" "$VALUE" $VERIFY_ATTEMPTS $VERIFY_WAIT_TIME
-        VERIFY_RESULT=$?
-        
-        if [ $VERIFY_RESULT -eq 0 ]; then
-            print_success "DNS 验证成功，继续处理..."
-        else
-            print_warning "DNS 验证未成功，但将继续等待剩余时间..."
-            # 即使验证失败，也等待剩余时间，让 Certbot 有机会验证
-            if [ $REMAINING_WAIT_TIME -gt 0 ]; then
-                print_info "等待剩余 $REMAINING_WAIT_TIME 秒..."
-                sleep $REMAINING_WAIT_TIME
-            fi
-        fi
-    else
-        # 如果没有验证函数，则使用原来的等待逻辑
-        print_info "等待 DNS 传播 (${DNS_PROPAGATION_SECONDS} 秒)..."
-        sleep $DNS_PROPAGATION_SECONDS
-    fi
+    # 等待 DNS 传播
+    print_info "等待 DNS 传播 (${DNS_PROPAGATION_SECONDS} 秒)..."
+    sleep $DNS_PROPAGATION_SECONDS
 elif [ "$ACTION" == "delete" ]; then
     # Find the record ID
     print_dns "使用阿里云 API 查找记录 ID..."
