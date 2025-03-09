@@ -103,7 +103,7 @@ sudo xcertbot
 
 请参阅 [使用指南 - GitHub Actions 自动化](docs/04-usage-guide.md#4-场景三github-actions-自动化) 获取详细设置步骤。
 
-> **注意**：X Certbot 将大量日志输出重定向到 stderr，在 GitHub Actions 中可能会被误解为错误。请参阅 [GitHub Actions 中的日志输出处理](docs/04-usage-guide.md#542-github-actions-中的日志输出处理) 了解如何正确处理这些输出。
+> **注意**：在 GitHub Actions 中使用 X Certbot 时，建议使用 `2>&1 | tee certbot_output.log` 来捕获所有输出并进行日志处理。请参阅 [GitHub Actions 中的日志输出处理](docs/04-usage-guide.md#542-github-actions-中的日志输出处理) 了解详细信息。
 
 ### 控制台输出配置
 

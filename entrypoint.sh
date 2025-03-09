@@ -166,20 +166,20 @@ configure_provider
 
 # Main execution
 if [ "$1" == "renew" ]; then
-    print_header "更新证书" >&2
-    print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商更新证书..." >&2
+    print_header "更新证书"
+    print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商更新证书..."
     
     if [ "$CHALLENGE_TYPE" == "dns" ]; then
         # DNS specific arguments
         export DNS_PROPAGATION_SECONDS
-        print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒" >&2
+        print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒"
     fi
     
     # 打印完整的 certbot 命令
-    print_subheader "Certbot 命令" >&2
-    print_info "certbot renew --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --deploy-hook $DEPLOY_HOOK" >&2
+    print_subheader "Certbot 命令"
+    print_info "certbot renew --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --deploy-hook $DEPLOY_HOOK"
     
-    print_info "执行证书更新命令..." >&2
+    print_info "执行证书更新命令..."
     
     # 直接执行命令，不使用 eval
     certbot renew --manual \
@@ -191,37 +191,37 @@ if [ "$1" == "renew" ]; then
         --deploy-hook "$DEPLOY_HOOK"
     
     if [ $? -eq 0 ]; then
-        print_success "证书更新完成" >&2
+        print_success "证书更新完成"
     else
-        print_error "证书更新失败" >&2
+        print_error "证书更新失败"
     fi
     
     exit $?
 fi
 
 # Get domain parameters
-print_step "1" "准备域名参数" >&2
-print_subheader "处理域名" >&2
-print_info "直接使用用户提供的域名参数" >&2
-print_cert "域名参数: $DOMAIN_ARG" >&2
+print_step "1" "准备域名参数"
+print_subheader "处理域名"
+print_info "直接使用用户提供的域名参数"
+print_cert "域名参数: $DOMAIN_ARG"
 
 # Obtain the certificates for all domains
-print_step "2" "获取证书" >&2
-print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商获取证书" >&2
+print_step "2" "获取证书"
+print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商获取证书"
 
 if [ "$CHALLENGE_TYPE" == "dns" ]; then
     # DNS specific environment variables
     export DNS_PROPAGATION_SECONDS
-    print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒" >&2
+    print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒"
 fi
 
 # 打印完整的 certbot 命令
-print_subheader "Certbot 命令" >&2
+print_subheader "Certbot 命令"
 cmd_preview="certbot certonly $DOMAIN_ARG --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --non-interactive --deploy-hook $DEPLOY_HOOK"
-print_info "$cmd_preview" >&2
+print_info "$cmd_preview"
 
 # Execute certbot command
-print_info "执行 Certbot 命令..." >&2
+print_info "执行 Certbot 命令..."
 
 # 直接执行命令，不使用 eval，但要注意 DOMAIN_ARG 可能包含空格，所以不加引号
 certbot certonly $DOMAIN_ARG \
@@ -235,24 +235,25 @@ certbot certonly $DOMAIN_ARG \
     --deploy-hook "$DEPLOY_HOOK"
 
 if [ $? -eq 0 ]; then
-    print_success "证书获取成功" >&2
+    print_success "证书获取成功"
 else
-    print_error "证书获取失败" >&2
+    print_error "证书获取失败"
 fi
 
 # Start cron daemon if CRON_ENABLED is true
 if [ "$CRON_ENABLED" == "true" ]; then
-    print_step "3" "设置定时任务" >&2
+    print_step "3" "设置定时任务"
     echo "$CRON_SCHEDULE /usr/local/bin/entrypoint.sh renew" > /etc/crontabs/root
-    print_cron "启动定时任务，计划: $CRON_SCHEDULE" >&2
+    print_cron "启动定时任务，计划: $CRON_SCHEDULE"
     crond -f -l 2
 else
-    print_info "未启用定时任务 (CRON_ENABLED != true)" >&2
-    # Keep container running if KEEP_RUNNING is true
-    if [ "$KEEP_RUNNING" == "true" ]; then
-        print_info "容器将保持运行 (KEEP_RUNNING=true)" >&2
-        tail -f /dev/null
-    fi
+    print_info "未启用定时任务 (CRON_ENABLED != true)"
 fi
 
-print_header "任务完成" >&2
+# Keep container running if KEEP_RUNNING is true
+if [ "$KEEP_RUNNING" == "true" ]; then
+    print_info "容器将保持运行 (KEEP_RUNNING=true)"
+    tail -f /dev/null
+fi
+
+print_header "任务完成"

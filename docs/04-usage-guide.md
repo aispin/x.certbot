@@ -454,20 +454,20 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 
 #### 5.4.2 GitHub Actions 中的日志输出处理
 
-**问题**：X Certbot 将大量日志输出重定向到 stderr，这在 GitHub Actions 中可能会被误解为错误。
+**说明**：虽然 X Certbot 不再将日志输出重定向到 stderr，但在 GitHub Actions 中仍建议使用特殊的日志处理方式，以便更好地管理和查看输出。
 
-**解决方案**：
-- 在 GitHub Actions 工作流中使用 `2>&1` 将 stderr 重定向到 stdout：
+**推荐方法**：
+- 在 GitHub Actions 工作流中使用 `2>&1 | tee certbot_output.log` 来捕获所有输出：
   ```yaml
   - name: Run Certbot container
     run: |
       docker run --rm \
         -v $(pwd)/.env:/.env \
         -v $(pwd)/certs:/etc/letsencrypt/certs \
-        aiblaze/x.certbot:latest 2>&1
+        aiblaze/x.certbot:latest 2>&1 | tee certbot_output.log
   ```
 
-- 更完善的方法是使用 `tee` 命令和 GitHub Actions 的特殊日志命令：
+- 更完善的方法是结合使用 `tee` 命令和 GitHub Actions 的特殊日志命令：
   ```yaml
   - name: Run Certbot container
     run: |
@@ -489,7 +489,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
   ```
 
 这种方法可以确保：
-1. 所有输出（包括 stderr）都会被记录到日志文件中
+1. 所有输出（包括可能的 stderr）都会被记录到日志文件中
 2. 只有在容器实际执行失败时才会显示错误
 3. 使用 GitHub Actions 的特殊日志命令来控制日志的显示级别
 
