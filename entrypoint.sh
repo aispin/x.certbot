@@ -33,8 +33,8 @@ source /opt/venv/bin/activate
 print_success "已激活 Python 虚拟环境"
 
 # Check required environment variables
-if [ -z "$DOMAINS" ] || [ -z "$EMAIL" ]; then
-    print_error "缺少必需的环境变量。请设置: DOMAINS, EMAIL"
+if [ -z "$DOMAIN_ARG" ] || [ -z "$EMAIL" ]; then
+    print_error "缺少必需的环境变量。请设置: DOMAIN_ARG, EMAIL"
     exit 1
 fi
 
@@ -44,7 +44,7 @@ CLOUD_PROVIDER=${CLOUD_PROVIDER:-"aliyun"}
 DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
 
 print_subheader "配置信息"
-print_key_value "域名" "$DOMAINS"
+print_key_value "域名参数" "$DOMAIN_ARG"
 print_key_value "邮箱" "$EMAIL"
 print_key_value "验证类型" "$CHALLENGE_TYPE"
 print_key_value "云服务提供商" "$CLOUD_PROVIDER"
@@ -154,37 +154,6 @@ configure_provider() {
     # Additional providers can be added here
 }
 
-# Function to parse domains and build domain arguments
-process_domains() {
-    print_subheader "处理域名"
-    
-    local domains_array
-    local domain_args=()
-    
-    # Parse comma-separated list of domains
-    IFS=',' read -ra domains_array <<< "$DOMAINS"
-
-    for domain in "${domains_array[@]}"; do
-        # Trim whitespace
-        domain=$(echo "$domain" | xargs)
-        # Add the primary domain
-        domain_args+=("-d" "$domain")
-        print_cert "添加域名: $domain"
-        
-        # Check if this is a top-level domain and if wildcards are enabled
-        if [[ "$ENABLE_WILDCARDS" == "true" && $(echo "$domain" | grep -o "\." | wc -l) -eq 1 ]]; then
-            # If it's a top-level domain and wildcards are enabled, add wildcard
-            domain_args+=("-d" "*.$domain")
-            print_cert "添加通配符域名: *.$domain"
-        fi
-    done
-    
-    # 返回域名参数数组
-    for arg in "${domain_args[@]}"; do
-        echo "$arg"
-    done
-}
-
 # Execute hook check
 print_subheader "检查钩子脚本"
 check_hook "$AUTH_HOOK" "验证" 
@@ -197,20 +166,20 @@ configure_provider
 
 # Main execution
 if [ "$1" == "renew" ]; then
-    print_header "更新证书"
-    print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商更新证书..."
+    print_header "更新证书" >&2
+    print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商更新证书..." >&2
     
     if [ "$CHALLENGE_TYPE" == "dns" ]; then
         # DNS specific arguments
         export DNS_PROPAGATION_SECONDS
-        print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒"
+        print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒" >&2
     fi
     
     # 打印完整的 certbot 命令
-    print_subheader "Certbot 命令"
-    print_info "certbot renew --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --deploy-hook $DEPLOY_HOOK"
+    print_subheader "Certbot 命令" >&2
+    print_info "certbot renew --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --deploy-hook $DEPLOY_HOOK" >&2
     
-    print_info "执行证书更新命令..."
+    print_info "执行证书更新命令..." >&2
     
     # 直接执行命令，不使用 eval
     certbot renew --manual \
@@ -222,43 +191,40 @@ if [ "$1" == "renew" ]; then
         --deploy-hook "$DEPLOY_HOOK"
     
     if [ $? -eq 0 ]; then
-        print_success "证书更新完成"
+        print_success "证书更新完成" >&2
     else
-        print_error "证书更新失败"
+        print_error "证书更新失败" >&2
     fi
     
     exit $?
 fi
 
 # Get domain parameters
-print_step "1" "准备域名参数"
-# 使用 mapfile 或 readarray 捕获函数输出到数组
-mapfile -t DOMAIN_ARGS < <(process_domains)
+print_step "1" "准备域名参数" >&2
+print_subheader "处理域名" >&2
+print_info "直接使用用户提供的域名参数" >&2
+print_cert "域名参数: $DOMAIN_ARG" >&2
 
 # Obtain the certificates for all domains
-print_step "2" "获取证书"
-print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商获取证书"
+print_step "2" "获取证书" >&2
+print_info "使用 $CHALLENGE_TYPE 验证方式和 $CLOUD_PROVIDER 提供商获取证书" >&2
 
 if [ "$CHALLENGE_TYPE" == "dns" ]; then
     # DNS specific environment variables
     export DNS_PROPAGATION_SECONDS
-    print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒"
+    print_dns "设置 DNS 传播等待时间: ${DNS_PROPAGATION_SECONDS}秒" >&2
 fi
 
 # 打印完整的 certbot 命令
-print_subheader "Certbot 命令"
-cmd_preview="certbot certonly"
-for arg in "${DOMAIN_ARGS[@]}"; do
-    cmd_preview="$cmd_preview $arg"
-done
-cmd_preview="$cmd_preview --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --non-interactive --deploy-hook $DEPLOY_HOOK"
-print_info "$cmd_preview"
+print_subheader "Certbot 命令" >&2
+cmd_preview="certbot certonly $DOMAIN_ARG --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --non-interactive --deploy-hook $DEPLOY_HOOK"
+print_info "$cmd_preview" >&2
 
 # Execute certbot command
-print_info "执行 Certbot 命令..."
+print_info "执行 Certbot 命令..." >&2
 
-# 直接执行命令，不使用 eval
-certbot certonly "${DOMAIN_ARGS[@]}" \
+# 直接执行命令，不使用 eval，但要注意 DOMAIN_ARG 可能包含空格，所以不加引号
+certbot certonly $DOMAIN_ARG \
     --manual \
     --preferred-challenges "$CHALLENGE_TYPE" \
     --manual-auth-hook "$AUTH_HOOK" \
@@ -269,24 +235,24 @@ certbot certonly "${DOMAIN_ARGS[@]}" \
     --deploy-hook "$DEPLOY_HOOK"
 
 if [ $? -eq 0 ]; then
-    print_success "证书获取成功"
+    print_success "证书获取成功" >&2
 else
-    print_error "证书获取失败"
+    print_error "证书获取失败" >&2
 fi
 
 # Start cron daemon if CRON_ENABLED is true
 if [ "$CRON_ENABLED" == "true" ]; then
-    print_step "3" "设置定时任务"
+    print_step "3" "设置定时任务" >&2
     echo "$CRON_SCHEDULE /usr/local/bin/entrypoint.sh renew" > /etc/crontabs/root
-    print_cron "启动定时任务，计划: $CRON_SCHEDULE"
+    print_cron "启动定时任务，计划: $CRON_SCHEDULE" >&2
     crond -f -l 2
 else
-    print_info "未启用定时任务 (CRON_ENABLED != true)"
+    print_info "未启用定时任务 (CRON_ENABLED != true)" >&2
     # Keep container running if KEEP_RUNNING is true
     if [ "$KEEP_RUNNING" == "true" ]; then
-        print_info "容器将保持运行 (KEEP_RUNNING=true)"
+        print_info "容器将保持运行 (KEEP_RUNNING=true)" >&2
         tail -f /dev/null
     fi
 fi
 
-print_header "任务完成"
+print_header "任务完成" >&2

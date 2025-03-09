@@ -29,7 +29,7 @@ jobs:
           ALIYUN_REGION=${{ secrets.ALIYUN_REGION }}
           ALIYUN_ACCESS_KEY_ID=${{ secrets.ALIYUN_ACCESS_KEY_ID }}
           ALIYUN_ACCESS_KEY_SECRET=${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-          DOMAINS=${{ secrets.DOMAINS }}
+          DOMAIN_ARG=${{ secrets.DOMAIN_ARG }}
           EMAIL=${{ secrets.EMAIL }}
           DNS_PROPAGATION_SECONDS=${DNS_PROPAGATION_SECONDS:-60}
           CHALLENGE_TYPE=${CHALLENGE_TYPE:-dns}
@@ -38,21 +38,32 @@ jobs:
 
       - name: Run Certbot container
         run: |
+          # 使用 tee 命令将输出同时发送到终端和文件
           docker run --rm \
             -v $(pwd)/.env:/.env \
             -v $(pwd)/certs:/etc/letsencrypt/certs \
-            aiblaze/x.certbot:latest
+            aiblaze/x.certbot:latest 2>&1 | tee certbot_output.log
+          
+          # 检查 Docker 命令的退出状态
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Certbot 容器执行失败，退出代码: $EXIT_CODE"
+            cat certbot_output.log
+            exit $EXIT_CODE
+          else
+            echo "::notice::Certbot 容器执行成功"
+          fi
 
       - name: Parse server configurations
         id: parse-servers
         run: |
           if [ -z "${{ secrets.SERVERS }}" ]; then
-            echo "错误：未配置SERVERS变量，请设置要部署的服务器列表"
+            echo "::error::未配置SERVERS变量，请设置要部署的服务器列表"
             exit 1
           fi
           
           if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
-            echo "错误：未配置SSH_PRIVATE_KEY变量，请设置SSH私钥"
+            echo "::error::未配置SSH_PRIVATE_KEY变量，请设置SSH私钥"
             exit 1
           fi
           
@@ -75,7 +86,7 @@ jobs:
               
               # 检查必要参数
               if [ -z "$username" ] || [ -z "$host" ]; then
-                echo "警告：服务器配置不完整，跳过: $server"
+                echo "::warning::服务器配置不完整，跳过: $server"
                 continue
               fi
               
@@ -84,7 +95,7 @@ jobs:
             fi
           done
           echo "EOF" >> $GITHUB_ENV
-          echo "服务器配置已加载，使用简化的 USER@HOST 格式"
+          echo "::notice::服务器配置已加载，使用简化的 USER@HOST 格式"
           
           # 创建SSH私钥文件
           SSH_KEY_FILE=$(mktemp)
@@ -100,31 +111,31 @@ jobs:
             # 分割配置字符串
             IFS='@' read -r username host <<< "$config"
             
-            echo "正在部署证书到服务器: $host"
+            echo "::notice::正在部署证书到服务器: $host"
             
             # 使用SCP复制文件
             echo "正在复制证书到 $CERT_DIR"
-            ssh -i $SSH_KEY_FILE -o StrictHostKeyChecking=no $username@$host "mkdir -p $CERT_DIR" || {
-              echo "错误：无法在 $host 上创建目录 $CERT_DIR"
+            ssh -i $SSH_KEY_FILE -o StrictHostKeyChecking=no $username@$host "mkdir -p $CERT_DIR" 2>&1 || {
+              echo "::error::无法在 $host 上创建目录 $CERT_DIR"
               continue
             }
             
-            scp -i $SSH_KEY_FILE -o StrictHostKeyChecking=no -r ./certs/* $username@$host:$CERT_DIR || {
-              echo "错误：无法复制证书到 $host"
+            scp -i $SSH_KEY_FILE -o StrictHostKeyChecking=no -r ./certs/* $username@$host:$CERT_DIR 2>&1 || {
+              echo "::error::无法复制证书到 $host"
               continue
             }
             
             # 执行证书更新后的钩子命令（如果有）
             if [ -n "$CERT_UPDATED_HOOK_CMD" ]; then
               echo "执行证书更新后的钩子命令..."
-              ssh -i $SSH_KEY_FILE -o StrictHostKeyChecking=no $username@$host "$CERT_UPDATED_HOOK_CMD" || {
-                echo "警告：无法在 $host 上执行更新后的钩子命令"
+              ssh -i $SSH_KEY_FILE -o StrictHostKeyChecking=no $username@$host "$CERT_UPDATED_HOOK_CMD" 2>&1 || {
+                echo "::warning::无法在 $host 上执行更新后的钩子命令"
               }
             else
               echo "未配置证书更新后的钩子命令，跳过"
             fi
             
-            echo "完成部署到服务器: $host"
+            echo "::notice::完成部署到服务器: $host"
           done
           
           # 清理
@@ -133,6 +144,7 @@ jobs:
       - name: Notify on success
         if: ${{ success() && secrets.WEBHOOK_URL != '' }}
         run: |
+          echo "::notice::发送成功通知到 Webhook"
           curl -X POST -H "Content-Type: application/json" \
             -d '{"text":"✅ 证书已成功更新并部署到服务器"}' \
             ${{ secrets.WEBHOOK_URL }}
@@ -140,6 +152,7 @@ jobs:
       - name: Notify on failure
         if: ${{ failure() && secrets.WEBHOOK_URL != '' }}
         run: |
+          echo "::error::发送失败通知到 Webhook"
           curl -X POST -H "Content-Type: application/json" \
             -d '{"text":"❌ 证书更新失败，请检查日志"}' \
             ${{ secrets.WEBHOOK_URL }} 

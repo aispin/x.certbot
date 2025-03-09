@@ -19,7 +19,7 @@
   - [详细的钩子执行流程](docs/05-development-guide.md#8-钩子脚本与自动化流程)
 - **灵活的证书管理**：
   - 支持多域名证书申请和管理
-  - 可选自动为顶级域名添加通配符证书
+  - 完全自定义域名参数格式
   - 可配置证书输出目录结构
   - 可选生成证书元数据文件
 - **CI/CD 友好**：
@@ -70,6 +70,22 @@ docker run -d \
   aiblaze/x.certbot:latest
 ```
 
+使用环境变量：
+
+```bash
+docker run -d \
+  -e ALIYUN_REGION="cn-hangzhou" \
+  -e ALIYUN_ACCESS_KEY_ID="your-access-key-id" \
+  -e ALIYUN_ACCESS_KEY_SECRET="your-access-key-secret" \
+  -e DOMAIN_ARG="-d example.com -d *.example.com" \
+  -e EMAIL="your-email@example.com" \
+  -e CHALLENGE_TYPE="dns" \
+  -e CLOUD_PROVIDER="aliyun" \
+  -v /path/to/certificates:/etc/letsencrypt/certs \
+  --name x.certbot \
+  aiblaze/x.certbot:latest
+```
+
 #### 无 Docker 环境
 
 ```bash
@@ -86,6 +102,8 @@ sudo xcertbot
 #### GitHub Actions
 
 请参阅 [使用指南 - GitHub Actions 自动化](docs/04-usage-guide.md#4-场景三github-actions-自动化) 获取详细设置步骤。
+
+> **注意**：X Certbot 将大量日志输出重定向到 stderr，在 GitHub Actions 中可能会被误解为错误。请参阅 [GitHub Actions 中的日志输出处理](docs/04-usage-guide.md#542-github-actions-中的日志输出处理) 了解如何正确处理这些输出。
 
 ### 控制台输出配置
 

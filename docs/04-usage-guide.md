@@ -400,6 +400,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 4. **定期轮换密钥**：
    为了安全起见，建议每 3-6 个月轮换一次部署密钥。
 
+
 ## 5. 常见问题与故障排除
 
 ### 5.1 DNS 验证失败
@@ -441,7 +442,7 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 检查目标服务器的 SSH 设置是否允许密钥认证
 - 如果某台服务器连接失败，工作流会继续尝试其他服务器，检查日志以确定哪台服务器有问题
 
-### 5.4.1 多服务器部署问题
+#### 5.4.1 多服务器部署问题
 
 **问题**：只有部分服务器成功部署证书。
 
@@ -450,6 +451,47 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 - 确认所有服务器都正确配置了相同的公钥
 - 验证每台服务器的用户是否有权限创建/写入 `CERT_DIR` 目录
 - 对于执行 `CERT_UPDATED_HOOK_CMD` 失败的服务器，确认用户是否有足够权限执行该命令
+
+#### 5.4.2 GitHub Actions 中的日志输出处理
+
+**问题**：X Certbot 将大量日志输出重定向到 stderr，这在 GitHub Actions 中可能会被误解为错误。
+
+**解决方案**：
+- 在 GitHub Actions 工作流中使用 `2>&1` 将 stderr 重定向到 stdout：
+  ```yaml
+  - name: Run Certbot container
+    run: |
+      docker run --rm \
+        -v $(pwd)/.env:/.env \
+        -v $(pwd)/certs:/etc/letsencrypt/certs \
+        aiblaze/x.certbot:latest 2>&1
+  ```
+
+- 更完善的方法是使用 `tee` 命令和 GitHub Actions 的特殊日志命令：
+  ```yaml
+  - name: Run Certbot container
+    run: |
+      # 使用 tee 命令将输出同时发送到终端和文件
+      docker run --rm \
+        -v $(pwd)/.env:/.env \
+        -v $(pwd)/certs:/etc/letsencrypt/certs \
+        aiblaze/x.certbot:latest 2>&1 | tee certbot_output.log
+      
+      # 检查 Docker 命令的退出状态
+      EXIT_CODE=${PIPESTATUS[0]}
+      if [ $EXIT_CODE -ne 0 ]; then
+        echo "::error::Certbot 容器执行失败，退出代码: $EXIT_CODE"
+        cat certbot_output.log
+        exit $EXIT_CODE
+      else
+        echo "::notice::Certbot 容器执行成功"
+      fi
+  ```
+
+这种方法可以确保：
+1. 所有输出（包括 stderr）都会被记录到日志文件中
+2. 只有在容器实际执行失败时才会显示错误
+3. 使用 GitHub Actions 的特殊日志命令来控制日志的显示级别
 
 ### 5.5 如何在 CI/CD 管道中使用？
 
@@ -519,19 +561,34 @@ X Certbot 支持将证书部署到多台服务器，配置方法如下：
 
 ## 7. 附录：域名处理逻辑
 
-X Certbot 对不同类型的域名有不同的处理逻辑：
+X Certbot 现在将域名处理权完全交给用户，不再自动处理域名格式。用户需要直接提供完整的域名参数：
 
-- **顶级域名**（如 example.com）：
-  - 自动添加通配符证书（*.example.com）
-  - 同时获取 example.com 和 *.example.com 的证书
+- **域名参数格式**：
+  - 使用 certbot 命令行参数格式，例如：`-d example.com -d *.example.com`
+  - 每个域名前都需要添加 `-d` 参数
+  - 如果需要通配符证书，请直接添加 `*.domain.com` 格式的域名
 
-- **子域名**（如 sub.example.com）：
-  - 只获取该特定子域名的证书
-  - 不自动添加通配符
+- **示例**：
+  - 单个域名：`-d example.com`
+  - 带通配符：`-d example.com -d *.example.com`
+  - 多个域名：`-d example.com -d *.example.com -d sub.example.com -d another.com`
 
-- **多个域名**：
-  - 使用逗号分隔，例如：`example.com,sub.example.com,another.com`
-  - 每个域名会根据上述规则分别处理
+> **注意**：不再支持逗号分隔的域名列表，也不再自动添加通配符。用户需要明确指定每个要获取证书的域名。
+
+### 7.1 环境变量设置示例
+
+在 `.env` 文件或 Docker 运行命令中设置 DOMAIN_ARG 变量：
+
+```bash
+# 单个域名
+DOMAIN_ARG="-d example.com"
+
+# 带通配符
+DOMAIN_ARG="-d example.com -d *.example.com"
+
+# 多个域名
+DOMAIN_ARG="-d example.com -d *.example.com -d sub.example.com -d another.com"
+```
 
 ## 8. 配置选项完整参考
 
@@ -539,9 +596,8 @@ X Certbot 对不同类型的域名有不同的处理逻辑：
 
 | 环境变量 | 必选 | 默认值 | 描述 |
 |----------|------|-------|------|
-| DOMAINS | 是 | - | 域名列表，逗号分隔 |
+| DOMAIN_ARG | 是 | - | 域名参数，格式为 `-d domain1 -d domain2` |
 | EMAIL | 是 | - | 证书所有者的电子邮件地址 |
-| ENABLE_WILDCARDS | 否 | true | 是否为顶级域名添加通配符证书 |
 
 ### 8.2 验证方式与云服务商
 

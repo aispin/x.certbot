@@ -42,50 +42,104 @@ RUN mkdir -p /var/www/html/.well-known/acme-challenge && \
     chmod -R 755 /var/www/html
 
 # Set environment variables (to be provided during runtime)
-# Core variables
-ENV DOMAINS=""
+#---------------------------------
+# 核心配置
+#---------------------------------
+# 域名参数 - 传递给 certbot 的完整的参数，如 -d example.com -d *.example.com
+ENV DOMAIN_ARG=""
+# 邮箱 - 用于接收证书更新通知
 ENV EMAIL=""
-# Challenge and provider configuration
+
+#---------------------------------
+# 验证方式与云服务商配置
+#---------------------------------
+# 验证方式 - dns 或 http
 ENV CHALLENGE_TYPE="dns"
+# 云服务提供商 - aliyun 或 tencentcloud
 ENV CLOUD_PROVIDER="aliyun"
-ENV ENABLE_WILDCARDS="true"
-# Provider-specific variables
+
+#---------------------------------
+# 阿里云配置 (当 CLOUD_PROVIDER=aliyun 时使用)
+#---------------------------------
+# 阿里云区域
 ENV ALIYUN_REGION=""
+# 阿里云访问密钥（建议使用 RAM 用户的密钥，只需要 DNS 修改权限）
 ENV ALIYUN_ACCESS_KEY_ID=""
 ENV ALIYUN_ACCESS_KEY_SECRET=""
+
+#---------------------------------
+# 腾讯云配置 (当 CLOUD_PROVIDER=tencentcloud 时使用)
+#---------------------------------
+# 腾讯云 API 密钥
 ENV TENCENTCLOUD_SECRET_ID=""
 ENV TENCENTCLOUD_SECRET_KEY=""
+# 腾讯云区域
 ENV TENCENTCLOUD_REGION="ap-guangzhou"
-# HTTP challenge configuration
+
+#---------------------------------
+# HTTP 验证配置 (当 CHALLENGE_TYPE=http 时使用)
+#---------------------------------
+# Web 根目录路径（用于放置验证文件）
 ENV WEBROOT_PATH="/var/www/html"
-# DNS configuration
+
+#---------------------------------
+# DNS 验证配置 (当 CHALLENGE_TYPE=dns 时使用)
+#---------------------------------
+# DNS 记录传播等待时间（秒）
 ENV DNS_PROPAGATION_SECONDS="60"
-# Hooks configuration (can be overridden to use custom hooks)
-# 认证钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
+
+#---------------------------------
+# 钩子脚本配置 (可选)
+#---------------------------------
+# 认证钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 自动选择对应的钩子
+# 除非想完全自定义，否则不要设置
 ENV AUTH_HOOK=""
-# 清理钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 选择对应的钩子（见 plugins/dns 和 plugins/http 目录）,除非想完全自定义，否则不要设置
+# 清理钩子 - 根据 CHALLENGE_TYPE 和 CLOUD_PROVIDER 自动选择对应的钩子
+# 除非想完全自定义，否则不要设置
 ENV CLEANUP_HOOK=""
-# 部署钩子 - 证书实际更新后调用，见 scripts/deploy-hook.sh，除非想完全自定义，否则不要设置
+# 部署钩子 - 证书实际更新后调用，见 scripts/deploy-hook.sh
+# 除非想完全自定义，否则不要设置
 ENV DEPLOY_HOOK=""
-# 证书更新后执行的自定义脚本 - 用于重启服务或分发证书等操作。推荐直接使用挂载宿主机脚本 -v /path/on/host/restart-services.sh:/host-scripts/post-renewal.sh
+# 证书更新后执行的自定义脚本 - 用于重启服务或分发证书等操作
+# 推荐直接使用挂载宿主机脚本 -v /path/on/host/restart-services.sh:/host-scripts/post-renewal.sh
 ENV POST_RENEWAL_SCRIPT=""
 
-# Certificate output configuration
+#---------------------------------
+# 证书输出配置
+#---------------------------------
+# 证书输出目录
 ENV CERT_OUTPUT_DIR="/etc/letsencrypt/certs"
-# 创建域名目录
+# 是否为每个域名创建单独的子目录
 ENV CREATE_DOMAIN_DIRS="true"
+# 是否创建证书元数据文件
 ENV CREATE_METADATA="true"
+# 证书文件权限
 ENV CERT_FILE_PERMISSIONS="644"
-# Webhook notification (optional)
+
+#---------------------------------
+# 通知配置
+#---------------------------------
+# Webhook URL（证书续期成功后通知）
 ENV WEBHOOK_URL=""
-# Cron configuration
+
+#---------------------------------
+# 自动续期与容器运行配置
+#---------------------------------
+# 是否启用 cron 自动续期
 ENV CRON_ENABLED="false"
+# 证书自动续期的 cron 表达式（默认每周一和周四凌晨 0 点）
 ENV CRON_SCHEDULE="0 0 * * 1,4"
-# Keep container running even without cron
+# 是否保持容器运行（即使不启用 cron）
 ENV KEEP_RUNNING="false"
-# Console output configuration
+
+#---------------------------------
+# 控制台输出配置
+#---------------------------------
+# 禁用彩色输出
 ENV NO_COLOR="false"
+# 禁用 emoji 图标
 ENV NO_EMOJI="false"
+# 启用调试输出
 ENV DEBUG="false"
 
 # Create directories for various purposes
