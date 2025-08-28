@@ -22,6 +22,11 @@ if [ -f "/usr/local/bin/scripts/console_utils.sh" ]; then
     source /usr/local/bin/scripts/console_utils.sh
 fi
 
+# 加载域名处理工具 (用于处理中文域名的 punycode 编码)
+if [ -f "/usr/local/bin/scripts/domain_utils.sh" ]; then
+    source /usr/local/bin/scripts/domain_utils.sh
+fi
+
 # 打印欢迎标题
 print_header "Let's Encrypt 证书自动化工具"
 print_info "开始执行证书管理流程..."
@@ -226,8 +231,16 @@ fi
 # Get domain parameters
 print_step "1" "准备域名参数"
 print_subheader "处理域名"
-print_info "直接使用用户提供的域名参数"
-print_cert "域名参数: $DOMAIN_ARG"
+print_info "处理域名参数，将中文域名编码为 punycode 格式"
+print_cert "原始域名参数: $DOMAIN_ARG"
+
+# Process domain arguments to encode Chinese domains to punycode
+if [ -n "$DOMAIN_ARG" ]; then
+    PROCESSED_DOMAIN_ARG=$(process_domain_args "$DOMAIN_ARG")
+    print_cert "处理后域名参数: $PROCESSED_DOMAIN_ARG"
+else
+    PROCESSED_DOMAIN_ARG="$DOMAIN_ARG"
+fi
 
 # Obtain the certificates for all domains
 print_step "2" "获取证书"
@@ -241,14 +254,14 @@ fi
 
 # 打印完整的 certbot 命令
 print_subheader "Certbot 命令"
-cmd_preview="certbot certonly $DOMAIN_ARG --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --non-interactive --deploy-hook $DEPLOY_HOOK"
+cmd_preview="certbot certonly $PROCESSED_DOMAIN_ARG --manual --preferred-challenges $CHALLENGE_TYPE --manual-auth-hook $AUTH_HOOK --manual-cleanup-hook $CLEANUP_HOOK --agree-tos --email $EMAIL --non-interactive --deploy-hook $DEPLOY_HOOK"
 print_info "$cmd_preview"
 
 # Execute certbot command
 print_info "执行 Certbot 命令..."
 
 # 直接执行命令，不使用 eval，但要注意 DOMAIN_ARG 可能包含空格，所以不加引号
-certbot certonly $DOMAIN_ARG \
+certbot certonly $PROCESSED_DOMAIN_ARG \
     --manual \
     --preferred-challenges "$CHALLENGE_TYPE" \
     --manual-auth-hook "$AUTH_HOOK" \

@@ -5,8 +5,9 @@
 # 功能: 
 #   1. 添加 DNS TXT 记录 (_acme-challenge) - 不带参数执行
 #   2. 删除 DNS TXT 记录 - 带 clean 参数执行
+#   3. 支持中文域名的 punycode 解码
 # 环境变量:
-#   CERTBOT_DOMAIN - 要验证的域名
+#   CERTBOT_DOMAIN - 要验证的域名 (支持中文域名)
 #   CERTBOT_VALIDATION - 验证值
 #   DNS_PROPAGATION_SECONDS - DNS 传播等待时间 (默认: 60秒)
 #   DEBUG - 设置为 true 启用调试输出
@@ -20,13 +21,14 @@ fi
 source /opt/venv/bin/activate
 [ "$DEBUG" = "true" ] && print_debug "已激活 Python 虚拟环境"
 
-# 加载 DNS 辅助函数
+# 加载统一的域名处理工具
 # 这些函数用于处理域名解析，如提取主域名和子域名前缀
-if [ -f "$(dirname "$0")/helper.sh" ]; then
-    source "$(dirname "$0")/helper.sh"
-    [ "$DEBUG" = "true" ] && print_debug "已加载 helper.sh"
+if [ -f "/usr/local/bin/scripts/domain_utils.sh" ]; then
+    source "/usr/local/bin/scripts/domain_utils.sh"
+    [ "$DEBUG" = "true" ] && print_debug "已加载 domain_utils.sh"
 else
-    print_warning "helper.sh 未找到，使用内置函数"
+    print_error "domain_utils.sh 未找到，这是必需的依赖文件"
+    exit 1
 fi
 
 # 设置默认值
@@ -61,36 +63,12 @@ if [ -z "$DOMAIN" ] || [ -z "$VALUE" ]; then
     exit 1
 fi
 
-# Use helper functions if available, otherwise use built-in functions
-if ! type get_main_domain >/dev/null 2>&1; then
-    # Function to extract the main domain from a subdomain
-    get_main_domain() {
-        local domain=$1
-        
-        # Handle special Chinese TLDs like .com.cn, .net.cn, etc.
-        if [[ "$domain" =~ .*\.(com|net|org|gov|edu)\.(cn|hk|tw)$ ]]; then
-            echo "$domain" | grep -o '[^.]*\.[^.]*\.[^.]*$'
-        else
-            echo "$domain" | grep -o '[^.]*\.[^.]*$'
-        fi
-    }
-fi
+# 注意：所有域名处理函数现在都在 domain_utils.sh 中统一管理
+# 包括：encode_punycode_domain, decode_punycode_domain, get_main_domain, get_subdomain_prefix
 
-if ! type get_subdomain_prefix >/dev/null 2>&1; then
-    # Function to get the subdomain prefix
-    get_subdomain_prefix() {
-        local domain=$1
-        local main_domain=$2
-        
-        if [ "$domain" == "$main_domain" ]; then
-            echo "@"
-        else
-            echo "${domain%.$main_domain}"
-        fi
-    }
-fi
-
-# Main domain extraction
+# Main domain extraction with punycode decoding
+ORIGINAL_DOMAIN="$DOMAIN"
+DECODED_DOMAIN=$(decode_punycode_domain "$DOMAIN")
 MAIN_DOMAIN=$(get_main_domain "$DOMAIN")
 SUBDOMAIN_PREFIX=$(get_subdomain_prefix "$DOMAIN" "$MAIN_DOMAIN")
 
@@ -102,7 +80,10 @@ else
 fi
 
 print_subheader "DNS 验证信息"
-print_key_value "域名" "$DOMAIN"
+print_key_value "原始域名" "$ORIGINAL_DOMAIN"
+if [ "$ORIGINAL_DOMAIN" != "$DECODED_DOMAIN" ]; then
+    print_key_value "解码后域名" "$DECODED_DOMAIN"
+fi
 print_key_value "主域名" "$MAIN_DOMAIN"
 print_key_value "子域名前缀" "$SUBDOMAIN_PREFIX"
 print_key_value "记录名" "$FULL_RECORD_NAME"
