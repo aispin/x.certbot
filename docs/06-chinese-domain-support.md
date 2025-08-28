@@ -198,19 +198,26 @@ ERROR: parse failed not support flag form -Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8mov
 
 **原因**：阿里云 CLI 将验证值误认为是命令行参数（当验证值以 `-` 开头时）
 
-**解决方案**：已修复，现在使用 JSON body 方式传递参数：
+**解决方案**：已修复，现在使用 `--body-file` 参数传递 JSON 文件：
 
 ```bash
 # 修复前（可能出错）
 aliyun alidns AddDomainRecord --Value "-Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8movKIWOO"
 
-# 修复后（使用 JSON body）
-aliyun alidns AddDomainRecord --body '{"Value": "-Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8movKIWOO"}'
+# 修复后（使用 JSON 文件）
+aliyun alidns AddDomainRecord --body-file /tmp/request.json
 ```
+
+**功能说明**：
+- 使用 `mktemp` 创建临时 JSON 文件
+- 使用 `--body-file` 参数传递文件路径
+- 操作完成后自动清理临时文件
+- 避免了命令行参数解析问题
+- 支持包含特殊字符的验证值
 
 **验证方法**：
 ```bash
-# 启用调试模式查看 JSON 请求体
+# 启用调试模式查看 JSON 文件内容
 docker run -e DEBUG="true" ... aiblaze/x.certbot:latest
 ```
 
@@ -272,3 +279,4 @@ DOMAIN_ARG="-d example.com -d 测试.com -d *.example.com -d *.测试.com"
 - **v1.4.0**：改进错误处理，将 domain_utils.sh 设为必需依赖
 - **v1.5.0**：修复阿里云 CLI 参数解析问题，使用 JSON body 方式传递参数，解决验证值以 `-` 开头时的错误
 - **v1.6.0**：修复 deploy-hook.sh 证书目录问题，自动解码 punycode 域名，将证书复制到中文域名目录下
+- **v1.7.0**：优化阿里云 CLI 参数传递，使用 `--body-file` 参数传递 JSON 文件，提高兼容性和稳定性
