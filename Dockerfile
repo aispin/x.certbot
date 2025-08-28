@@ -4,7 +4,7 @@ FROM alpine:latest
 ARG ALIYUN_CLI_URL="https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz"
 
 # Install dependencies
-RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl bind-tools idn2 && \
+RUN apk --no-cache add wget tar sudo certbot bash python3 py3-pip jq curl openssl bind-tools idn2-utils && \
     apk --no-cache add --virtual build-dependencies gcc musl-dev python3-dev libffi-dev openssl-dev make
 
 # Install aliyun-cli
