@@ -189,6 +189,56 @@ docker run --rm aiblaze/x.certbot:latest idn2 -d "xn--0zwm56d.com"
 2. 等待 DNS 传播完成
 3. 使用 `dig` 或 `nslookup` 验证记录是否生效
 
+### 4. 阿里云 CLI 参数解析错误
+
+如果遇到类似以下错误：
+```
+ERROR: parse failed not support flag form -Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8movKIWOO
+```
+
+**原因**：阿里云 CLI 将验证值误认为是命令行参数（当验证值以 `-` 开头时）
+
+**解决方案**：已修复，现在使用 JSON body 方式传递参数：
+
+```bash
+# 修复前（可能出错）
+aliyun alidns AddDomainRecord --Value "-Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8movKIWOO"
+
+# 修复后（使用 JSON body）
+aliyun alidns AddDomainRecord --body '{"Value": "-Q2lFN0AeVKEquT4H3FZo3UxNFlQirKK0J8movKIWOO"}'
+```
+
+**验证方法**：
+```bash
+# 启用调试模式查看 JSON 请求体
+docker run -e DEBUG="true" ... aiblaze/x.certbot:latest
+```
+
+### 5. 证书目录名称问题
+
+如果遇到类似以下错误：
+```
+[ERROR] 临时证书目录中未找到 养生茶.store 的证书
+```
+
+**原因**：证书申请时使用 punycode 编码的域名，但用户期望在中文域名目录下找到证书
+
+**解决方案**：已修复，`deploy-hook.sh` 现在会自动解码 punycode 域名：
+
+```bash
+# 修复前
+/tmp/certs/live/xn--l6qu28fgvj.store/cert.pem  # 用户找不到
+
+# 修复后
+/tmp/certs/live/养生茶.store/cert.pem  # 用户可以直接找到
+```
+
+**功能说明**：
+- 自动检测 punycode 编码的域名目录
+- 解码为中文域名并创建对应目录
+- 将证书文件复制到中文域名目录下
+- 在元数据文件中记录原始和解码后的域名
+
 ## 示例配置
 
 ### 完整的中文域名配置示例
@@ -220,3 +270,5 @@ DOMAIN_ARG="-d example.com -d 测试.com -d *.example.com -d *.测试.com"
 - **v1.2.0**：改进错误处理和调试输出
 - **v1.3.0**：重构代码结构，统一域名处理函数，删除重复代码
 - **v1.4.0**：改进错误处理，将 domain_utils.sh 设为必需依赖
+- **v1.5.0**：修复阿里云 CLI 参数解析问题，使用 JSON body 方式传递参数，解决验证值以 `-` 开头时的错误
+- **v1.6.0**：修复 deploy-hook.sh 证书目录问题，自动解码 punycode 域名，将证书复制到中文域名目录下

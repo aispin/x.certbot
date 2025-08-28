@@ -92,14 +92,24 @@ print_key_value "操作" "$ACTION"
 
 # Perform the DNS operation
 if [ "$ACTION" == "add" ]; then
-    # Add DNS record
+    # Add DNS record using JSON body to avoid parameter parsing issues
     print_dns "使用阿里云 API 添加 DNS 记录..."
-    aliyun --profile "$PROFILE" alidns AddDomainRecord \
-        --DomainName "$MAIN_DOMAIN" \
-        --RR "$FULL_RECORD_NAME" \
-        --Type "TXT" \
-        --Value "$VALUE" \
-        --TTL 600
+    
+    # 使用 JSON body 方式避免参数解析问题（特别是当验证值以 - 开头时）
+    JSON_BODY=$(cat <<EOF
+{
+    "DomainName": "$MAIN_DOMAIN",
+    "RR": "$FULL_RECORD_NAME",
+    "Type": "TXT",
+    "Value": "$VALUE",
+    "TTL": 600
+}
+EOF
+)
+    
+    [ "$DEBUG" = "true" ] && print_debug "JSON 请求体: $JSON_BODY"
+    
+    aliyun --profile "$PROFILE" alidns AddDomainRecord --body "$JSON_BODY"
     
     result=$?
     if [ $result -ne 0 ]; then
@@ -111,20 +121,39 @@ if [ "$ACTION" == "add" ]; then
     print_info "等待 DNS 传播 (${DNS_PROPAGATION_SECONDS} 秒)..."
     sleep $DNS_PROPAGATION_SECONDS
 elif [ "$ACTION" == "delete" ]; then
-    # Find the record ID
+    # Find the record ID using JSON body to avoid parameter parsing issues
     print_dns "使用阿里云 API 查找记录 ID..."
-    RECORD_ID=$(aliyun --profile "$PROFILE" alidns DescribeDomainRecords \
-        --DomainName "$MAIN_DOMAIN" \
-        --RRKeyWord "$FULL_RECORD_NAME" \
-        --Type "TXT" \
-        --ValueKeyWord "$VALUE" \
+    
+    # 使用 JSON body 方式查询记录，避免参数解析问题
+    QUERY_BODY=$(cat <<EOF
+{
+    "DomainName": "$MAIN_DOMAIN",
+    "RRKeyWord": "$FULL_RECORD_NAME",
+    "Type": "TXT",
+    "ValueKeyWord": "$VALUE"
+}
+EOF
+)
+    
+    [ "$DEBUG" = "true" ] && print_debug "查询 JSON 请求体: $QUERY_BODY"
+    
+    RECORD_ID=$(aliyun --profile "$PROFILE" alidns DescribeDomainRecords --body "$QUERY_BODY" \
         | jq -r '.DomainRecords.Record[0].RecordId')
     
     if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-        # Delete the record
+        # Delete the record using JSON body
         print_dns "删除记录 ID: $RECORD_ID"
-        aliyun --profile "$PROFILE" alidns DeleteDomainRecord \
-            --RecordId "$RECORD_ID"
+        
+        DELETE_BODY=$(cat <<EOF
+{
+    "RecordId": "$RECORD_ID"
+}
+EOF
+)
+        
+        [ "$DEBUG" = "true" ] && print_debug "删除 JSON 请求体: $DELETE_BODY"
+        
+        aliyun --profile "$PROFILE" alidns DeleteDomainRecord --body "$DELETE_BODY"
         
         if [ $? -ne 0 ]; then
             print_error "删除 DNS 记录失败"
@@ -136,4 +165,4 @@ elif [ "$ACTION" == "delete" ]; then
 fi
 
 print_success "阿里云 DNS 操作成功完成"
-exit 0 
+exit 0

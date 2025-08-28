@@ -8,6 +8,7 @@
 #   3. 可选创建元数据文件
 #   4. 执行自定义后续脚本
 #   5. 发送 Webhook 通知
+#   6. 支持中文域名：将 punycode 编码的目录名解码为中文域名
 # 环境变量:
 #   RENEWED_LINEAGE - 续期证书的路径 (由 Certbot 提供)
 #   CERT_OUTPUT_DIR - 证书输出目录 (默认: /etc/letsencrypt/certs/live)
@@ -20,6 +21,12 @@
 # 加载控制台工具 (用于美化输出和日志记录)
 if [ -f "/usr/local/bin/scripts/console_utils.sh" ]; then
     source "/usr/local/bin/scripts/console_utils.sh"
+fi
+
+# 加载域名处理工具 (用于 punycode 解码)
+if [ -f "/usr/local/bin/scripts/domain_utils.sh" ]; then
+    source "/usr/local/bin/scripts/domain_utils.sh"
+    [ "$DEBUG" = "true" ] && print_debug "已加载 domain_utils.sh"
 fi
 
 print_deploy "证书更新成功: $RENEWED_LINEAGE"
@@ -35,7 +42,24 @@ mkdir -p "$CERT_OUTPUT_DIR"
 # 如果 CREATE_DOMAIN_DIRS=true，则为每个域名创建单独的目录
 if [ "$CREATE_DOMAIN_DIRS" == "true" ]; then
     # 从证书目录名称提取域名
-    DOMAIN=$(basename "$RENEWED_LINEAGE")
+    PUNYCODE_DOMAIN=$(basename "$RENEWED_LINEAGE")
+    
+    # 解码 punycode 域名为中文域名（如果 domain_utils.sh 可用）
+    if command -v decode_punycode_domain >/dev/null 2>&1; then
+        DECODED_DOMAIN=$(decode_punycode_domain "$PUNYCODE_DOMAIN")
+        if [ "$PUNYCODE_DOMAIN" != "$DECODED_DOMAIN" ]; then
+            print_info "检测到 punycode 编码域名: $PUNYCODE_DOMAIN"
+            print_info "解码为中文域名: $DECODED_DOMAIN"
+            DOMAIN="$DECODED_DOMAIN"
+        else
+            DOMAIN="$PUNYCODE_DOMAIN"
+        fi
+    else
+        # 如果域名处理工具不可用，使用原始域名
+        DOMAIN="$PUNYCODE_DOMAIN"
+        print_warning "域名处理工具不可用，使用原始域名: $DOMAIN"
+    fi
+    
     DOMAIN_DIR="$CERT_OUTPUT_DIR/$DOMAIN"
     mkdir -p "$DOMAIN_DIR"
     OUTPUT_DIR="$DOMAIN_DIR"
@@ -83,7 +107,8 @@ if [ "$CREATE_METADATA" == "true" ]; then
     # 包含域名、更新时间、证书信息和文件路径
     cat > "$METADATA_FILE" <<EOL
 {
-  "domain": "$(basename "$RENEWED_LINEAGE")",
+  "domain": "$DOMAIN",
+  "punycode_domain": "$PUNYCODE_DOMAIN",
   "renewed_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "certificate": {
     "subject": "$CERT_SUBJECT",
@@ -112,7 +137,8 @@ if [ -n "$POST_RENEWAL_SCRIPT" ] && [ -f "$POST_RENEWAL_SCRIPT" ] && [ -x "$POST
     
     # 将证书详细信息作为环境变量传递给脚本
     # 这些变量可以在脚本中使用，例如重启 Web 服务器或分发证书
-    RENEWED_DOMAIN=$(basename "$RENEWED_LINEAGE") \
+    RENEWED_DOMAIN="$DOMAIN" \
+    RENEWED_PUNYCODE_DOMAIN="$PUNYCODE_DOMAIN" \
     RENEWED_FULLCHAIN="$OUTPUT_DIR/$FULLCHAIN_NAME" \
     RENEWED_PRIVKEY="$OUTPUT_DIR/$PRIVKEY_NAME" \
     RENEWED_CERT="$OUTPUT_DIR/$CERT_NAME" \
@@ -131,7 +157,8 @@ elif [ -f "/host-scripts/post-renewal.sh" ] && [ -x "/host-scripts/post-renewal.
     print_deploy "执行宿主机更新后脚本..."
     
     # 将证书详细信息作为环境变量传递给脚本
-    RENEWED_DOMAIN=$(basename "$RENEWED_LINEAGE") \
+    RENEWED_DOMAIN="$DOMAIN" \
+    RENEWED_PUNYCODE_DOMAIN="$PUNYCODE_DOMAIN" \
     RENEWED_FULLCHAIN="$OUTPUT_DIR/$FULLCHAIN_NAME" \
     RENEWED_PRIVKEY="$OUTPUT_DIR/$PRIVKEY_NAME" \
     RENEWED_CERT="$OUTPUT_DIR/$CERT_NAME" \
@@ -155,7 +182,7 @@ if [ -n "$WEBHOOK_URL" ]; then
     
     # 准备 Webhook 数据
     # 包含域名、状态和时间戳
-    WEBHOOK_DATA="{\"domain\":\"$(basename "$RENEWED_LINEAGE")\",\"status\":\"success\",\"timestamp\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}"
+    WEBHOOK_DATA="{\"domain\":\"$DOMAIN\",\"punycode_domain\":\"$PUNYCODE_DOMAIN\",\"status\":\"success\",\"timestamp\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}"
     
     # 发送 Webhook 请求
     # 使用 curl 发送 POST 请求，内容类型为 application/json
