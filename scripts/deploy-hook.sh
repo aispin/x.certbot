@@ -8,7 +8,7 @@
 #   3. 可选创建元数据文件
 #   4. 执行自定义后续脚本
 #   5. 发送 Webhook 通知
-#   6. 支持中文域名：将 punycode 编码的目录名解码为中文域名
+#   6. 关于中文域名：x.certbot 需使用中文域名的 punycode 进行证书申请，因此证书目录名称是域名对应的 punycode 编码，nginx 配置的 server_name 也同样需要用 punycode 编码
 # 环境变量:
 #   RENEWED_LINEAGE - 续期证书的路径 (由 Certbot 提供)
 #   CERT_OUTPUT_DIR - 证书输出目录 (默认: /etc/letsencrypt/certs/live)
@@ -43,21 +43,16 @@ mkdir -p "$CERT_OUTPUT_DIR"
 if [ "$CREATE_DOMAIN_DIRS" == "true" ]; then
     # 从证书目录名称提取域名
     PUNYCODE_DOMAIN=$(basename "$RENEWED_LINEAGE")
+    DOMAIN="$PUNYCODE_DOMAIN"
     
-    # 解码 punycode 域名为中文域名（如果 domain_utils.sh 可用）
+    # 解码 punycode 域名并提示用户
     if command -v decode_punycode_domain >/dev/null 2>&1; then
         DECODED_DOMAIN=$(decode_punycode_domain "$PUNYCODE_DOMAIN")
         if [ "$PUNYCODE_DOMAIN" != "$DECODED_DOMAIN" ]; then
             print_info "检测到 punycode 编码域名: $PUNYCODE_DOMAIN"
             print_info "解码为中文域名: $DECODED_DOMAIN"
             DOMAIN="$DECODED_DOMAIN"
-        else
-            DOMAIN="$PUNYCODE_DOMAIN"
         fi
-    else
-        # 如果域名处理工具不可用，使用原始域名
-        DOMAIN="$PUNYCODE_DOMAIN"
-        print_warning "域名处理工具不可用，使用原始域名: $DOMAIN"
     fi
     
     DOMAIN_DIR="$CERT_OUTPUT_DIR/$DOMAIN"
@@ -108,7 +103,7 @@ if [ "$CREATE_METADATA" == "true" ]; then
     cat > "$METADATA_FILE" <<EOL
 {
   "domain": "$DOMAIN",
-  "punycode_domain": "$PUNYCODE_DOMAIN",
+  "decoded_domain": "$DECODED_DOMAIN",
   "renewed_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "certificate": {
     "subject": "$CERT_SUBJECT",
@@ -138,7 +133,7 @@ if [ -n "$POST_RENEWAL_SCRIPT" ] && [ -f "$POST_RENEWAL_SCRIPT" ] && [ -x "$POST
     # 将证书详细信息作为环境变量传递给脚本
     # 这些变量可以在脚本中使用，例如重启 Web 服务器或分发证书
     RENEWED_DOMAIN="$DOMAIN" \
-    RENEWED_PUNYCODE_DOMAIN="$PUNYCODE_DOMAIN" \
+    RENEWED_DECODED_DOMAIN="$DECODED_DOMAIN" \
     RENEWED_FULLCHAIN="$OUTPUT_DIR/$FULLCHAIN_NAME" \
     RENEWED_PRIVKEY="$OUTPUT_DIR/$PRIVKEY_NAME" \
     RENEWED_CERT="$OUTPUT_DIR/$CERT_NAME" \
@@ -158,7 +153,7 @@ elif [ -f "/host-scripts/post-renewal.sh" ] && [ -x "/host-scripts/post-renewal.
     
     # 将证书详细信息作为环境变量传递给脚本
     RENEWED_DOMAIN="$DOMAIN" \
-    RENEWED_PUNYCODE_DOMAIN="$PUNYCODE_DOMAIN" \
+    RENEWED_DECODED_DOMAIN="$DECODED_DOMAIN" \
     RENEWED_FULLCHAIN="$OUTPUT_DIR/$FULLCHAIN_NAME" \
     RENEWED_PRIVKEY="$OUTPUT_DIR/$PRIVKEY_NAME" \
     RENEWED_CERT="$OUTPUT_DIR/$CERT_NAME" \
@@ -182,7 +177,7 @@ if [ -n "$WEBHOOK_URL" ]; then
     
     # 准备 Webhook 数据
     # 包含域名、状态和时间戳
-    WEBHOOK_DATA="{\"domain\":\"$DOMAIN\",\"punycode_domain\":\"$PUNYCODE_DOMAIN\",\"status\":\"success\",\"timestamp\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}"
+    WEBHOOK_DATA="{\"domain\":\"$DOMAIN\",\"decoded_domain\":\"$DECODED_DOMAIN\",\"status\":\"success\",\"timestamp\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}"
     
     # 发送 Webhook 请求
     # 使用 curl 发送 POST 请求，内容类型为 application/json
