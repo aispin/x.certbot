@@ -92,32 +92,16 @@ print_key_value "操作" "$ACTION"
 
 # Perform the DNS operation
 if [ "$ACTION" == "add" ]; then
-    # Add DNS record using JSON body file to avoid parameter parsing issues
+    # Add DNS record
     print_dns "使用阿里云 API 添加 DNS 记录..."
-    
-    # 创建临时 JSON 文件
-    TEMP_JSON_FILE=$(mktemp)
-    
-    # 使用 JSON body file 方式避免参数解析问题（特别是当验证值以 - 开头时）
-    cat > "$TEMP_JSON_FILE" <<EOF
-{
-    "DomainName": "$MAIN_DOMAIN",
-    "RR": "$FULL_RECORD_NAME",
-    "Type": "TXT",
-    "Value": "$VALUE",
-    "TTL": 600
-}
-EOF
-    
-    [ "$DEBUG" = "true" ] && print_debug "JSON 文件内容: $(cat "$TEMP_JSON_FILE")"
-    
-    aliyun --profile "$PROFILE" alidns AddDomainRecord --body-file "$TEMP_JSON_FILE"
+    aliyun --profile "$PROFILE" alidns AddDomainRecord \
+        --DomainName "$MAIN_DOMAIN" \
+        --RR "$FULL_RECORD_NAME" \
+        --Type "TXT" \
+        --Value "$VALUE" \
+        --TTL 600
     
     result=$?
-    
-    # 清理临时文件
-    rm -f "$TEMP_JSON_FILE"
-    
     if [ $result -ne 0 ]; then
         print_error "添加 DNS 记录失败"
         exit 1
@@ -127,53 +111,22 @@ EOF
     print_info "等待 DNS 传播 (${DNS_PROPAGATION_SECONDS} 秒)..."
     sleep $DNS_PROPAGATION_SECONDS
 elif [ "$ACTION" == "delete" ]; then
-    # Find the record ID using JSON body file to avoid parameter parsing issues
+    # Find the record ID
     print_dns "使用阿里云 API 查找记录 ID..."
-    
-    # 创建临时 JSON 文件用于查询
-    TEMP_QUERY_FILE=$(mktemp)
-    
-    # 使用 JSON body file 方式查询记录，避免参数解析问题
-    cat > "$TEMP_QUERY_FILE" <<EOF
-{
-    "DomainName": "$MAIN_DOMAIN",
-    "RRKeyWord": "$FULL_RECORD_NAME",
-    "Type": "TXT",
-    "ValueKeyWord": "$VALUE"
-}
-EOF
-    
-    [ "$DEBUG" = "true" ] && print_debug "查询 JSON 文件内容: $(cat "$TEMP_QUERY_FILE")"
-    
-    RECORD_ID=$(aliyun --profile "$PROFILE" alidns DescribeDomainRecords --body-file "$TEMP_QUERY_FILE" \
+    RECORD_ID=$(aliyun --profile "$PROFILE" alidns DescribeDomainRecords \
+        --DomainName "$MAIN_DOMAIN" \
+        --RRKeyWord "$FULL_RECORD_NAME" \
+        --Type "TXT" \
+        --ValueKeyWord "$VALUE" \
         | jq -r '.DomainRecords.Record[0].RecordId')
     
-    # 清理临时查询文件
-    rm -f "$TEMP_QUERY_FILE"
-    
     if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-        # Delete the record using JSON body file
+        # Delete the record
         print_dns "删除记录 ID: $RECORD_ID"
+        aliyun --profile "$PROFILE" alidns DeleteDomainRecord \
+            --RecordId "$RECORD_ID"
         
-        # 创建临时 JSON 文件用于删除
-        TEMP_DELETE_FILE=$(mktemp)
-        
-        cat > "$TEMP_DELETE_FILE" <<EOF
-{
-    "RecordId": "$RECORD_ID"
-}
-EOF
-        
-        [ "$DEBUG" = "true" ] && print_debug "删除 JSON 文件内容: $(cat "$TEMP_DELETE_FILE")"
-        
-        aliyun --profile "$PROFILE" alidns DeleteDomainRecord --body-file "$TEMP_DELETE_FILE"
-        
-        delete_result=$?
-        
-        # 清理临时删除文件
-        rm -f "$TEMP_DELETE_FILE"
-        
-        if [ $delete_result -ne 0 ]; then
+        if [ $? -ne 0 ]; then
             print_error "删除 DNS 记录失败"
             exit 1
         fi
@@ -183,4 +136,4 @@ EOF
 fi
 
 print_success "阿里云 DNS 操作成功完成"
-exit 0
+exit 0 
