@@ -50,8 +50,8 @@ if [ "$CREATE_DOMAIN_DIRS" == "true" ]; then
         DECODED_DOMAIN=$(decode_punycode_domain "$PUNYCODE_DOMAIN")
         if [ "$PUNYCODE_DOMAIN" != "$DECODED_DOMAIN" ]; then
             print_info "检测到 punycode 编码域名: $PUNYCODE_DOMAIN"
-            print_info "解码为中文域名: $DECODED_DOMAIN"
-            DOMAIN="$DECODED_DOMAIN"
+            print_info "解码为中文域名: $DECODED_DOMAIN，存储目录使用：$PUNYCODE_DOMAIN"
+            # DOMAIN="$DECODED_DOMAIN"
         fi
     fi
     
