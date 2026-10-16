@@ -1,0 +1,149 @@
+name: Docker Publish → Docker Hub (公开镜像)
+
+# 用途: 把 x.certbot 的多架构镜像发布到 Docker Hub（公开市场，任何人可拉）。
+#
+# 设计要点:
+#   1. 【自动触发】: 打 tag 时发布。公开市场应当随「正式发布」更新，
+#      而且只在这里维护一份公开镜像。
+#      tag 规范以本仓库既有文档为准（docs/05-development-guide.md 第 7 节「发布流程」）:
+#      SemVer，形如 v1.2.3 —— `git tag -a vx.y.z -m "Release version x.y.z"` 后
+#      `git push origin vx.y.z`，所以用 push tag 触发即可，无需额外的 release 事件。
+#   2. 保留 workflow_dispatch 作为兜底: 补发/重发某次发布，
+#      或临时手动构建一个版本（默认不推 latest，避免误覆盖公开的 latest）。
+#   3. 多架构 (linux/amd64, linux/arm64) 与拆分前一致，用 QEMU + Buildx 构建；
+#      构建缓存仍走 GitHub Actions cache，用 scope=dockerhub 与阿里云 ACR
+#      那条 workflow 的缓存分开，避免两条链路的缓存互相污染
+#      （拆分前 Docker Hub 这一步只有 cache-from，缓存来自同 job 里的 ACR 构建步骤；
+#       拆开之后必须自己 cache-to，否则这条链路会彻底没有缓存）。
+#   4. 标签规则见「推导版本与标签」这一步（latest / 版本号 / sha-<commit>）。
+#   5. 本 workflow 只引用确实存在的配置项，且沿用原有名字:
+#        DOCKERHUB_USERNAME  (Variables) —— 与 docs/05-development-guide.md 第 6.4 节一致
+#        DOCKERHUB_TOKEN     (Secrets)   —— 同上
+#      ⚠️ 按本仓库约定，这两个配置项放在 GitHub Environment `PROD` 下，
+#      所以 job 上必须声明 `environment: PROD`，否则取到的是空字符串。
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # 匹配版本标签，如 v1.0.0, v1.2.3 等（与 docs/05 §7.2 的发布流程一致）
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本号（如 1.2.3 或 v1.2.3；留空 = 只推 sha-<commit>）'
+        required: false
+        default: ''
+      push_latest:
+        description: '同时更新 latest 标签。手动跑时默认不勾，避免误覆盖公开的 latest'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 避免两次发布同时覆盖 Docker Hub 上的同一个标签
+concurrency:
+  group: docker-publish-dockerhub
+  cancel-in-progress: false
+
+env:
+  # 镜像名与拆分前一致（Docker Hub 上是 <DOCKERHUB_USERNAME>/x.certbot）
+  IMAGE_NAME: x.certbot
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # ⚠️ 硬性要求: 下面的 DOCKERHUB_* 都配置在 Environment `PROD` 下。
+    environment: PROD
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # 获取完整历史与 tag，便于从 tag 推导版本信息
+
+      - name: 安装 QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 安装 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 推导版本与标签
+        id: tags
+        # 用户输入一律通过 env 传入，不要直接插值进 shell 命令（避免命令注入）
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUSH_LATEST: ${{ inputs.push_latest }}
+        run: |
+          set -euo pipefail
+
+          REPO="${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          # ---- 版本号推导（沿用原 workflow 的规则）----
+          #   1) tag 触发 -> 用 tag 名去掉前导 v（如 v1.2.3 -> 1.2.3）
+          #   2) 否则用 workflow_dispatch 的 version 输入（同样去掉前导 v）
+          #   3) 都没有 -> 没有版本标签，只推不可变的 sha-<commit>
+          VERSION=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          fi
+
+          # Docker 标签只允许 [A-Za-z0-9_.-]，长度不超过 128
+          if [ -n "${VERSION}" ] && ! [[ "${VERSION}" =~ ^[A-Za-z0-9_.-]{1,128}$ ]]; then
+            echo "::error::非法的版本号 '${VERSION}'（Docker 标签只允许 A-Za-z0-9_.-，且不超过 128 字符）"
+            exit 1
+          fi
+
+          # ---- 是否打 latest ----
+          #   tag 触发 = 正式发布，latest 必须跟随（公开市场的 latest 指向最新正式版）；
+          #   手动触发默认 false，不碰公开的 latest，要先推版本标签确认无误后再手动推 latest
+          PUSH_LATEST="false"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] || [ "${INPUT_PUSH_LATEST:-false}" = "true" ]; then
+            PUSH_LATEST="true"
+          fi
+
+          TAGS="${REPO}:sha-${SHORT_SHA}"
+          if [ -n "${VERSION}" ]; then
+            TAGS="${TAGS},${REPO}:${VERSION}"
+          fi
+          if [ "${PUSH_LATEST}" = "true" ]; then
+            TAGS="${TAGS},${REPO}:latest"
+          fi
+
+          # Dockerfile 的 LABEL org.opencontainers.image.version 用这个值；
+          # 没有版本号时沿用拆分前的 'latest' 兜底
+          BUILD_VERSION="${VERSION:-latest}"
+
+          {
+            echo "VERSION=${VERSION}"
+            echo "BUILD_VERSION=${BUILD_VERSION}"
+            echo "TAGS=${TAGS}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "version=${VERSION}"
+            echo "tags=${TAGS}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "版本: ${VERSION:-（无，仅 sha 标签）}"
+          echo "推送标签: ${TAGS}"
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送到 Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.TAGS }}
+          build-args: |
+            VERSION=${{ env.BUILD_VERSION }}
+          cache-from: type=gha,scope=dockerhub
+          cache-to: type=gha,mode=max,scope=dockerhub

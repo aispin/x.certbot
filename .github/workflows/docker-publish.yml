@@ -1,106 +1,148 @@
-name: Docker Image CI/CD
+name: Docker Publish → Aliyun ACR (私有镜像)
+
+# 用途: 把 x.certbot 的多架构镜像推送到阿里云容器镜像服务 (ACR)，供国内环境直接拉取。
+#       这是私有镜像仓库，不面向公开市场。
+#
+# 设计要点:
+#   1. 【只手动触发】。私有仓库的推送服务于「我要一个能拉的镜像」这个动作，
+#      而不是每次 push 的副作用 —— 什么时候发、发哪个版本由人工决定更可控，
+#      也不会在 ACR 里堆出一串没人用过的 latest。
+#      因此原来的 `push: branches: [main]` 与 `push: tags: [v*.*.*]` 已整段移除。
+#   2. 公开镜像（Docker Hub）由 .github/workflows/docker-publish-official.yml 负责，
+#      在打 tag 时自动发布。同一个镜像不再由两条 workflow 重复推送，
+#      公开市场也只维护那一份。
+#   3. 多架构 (linux/amd64, linux/arm64) 与拆分前一致，用 QEMU + Buildx 构建；
+#      构建缓存仍走 GitHub Actions cache，只是用 scope=acr 与官方镜像那条
+#      workflow 的缓存分开，避免两条链路的缓存互相污染。
+#   4. 标签规则见「推导版本与标签」这一步（latest / 版本号 / sha-<commit>）。
+#   5. 凭据全部来自 GitHub Environment `PROD`（Variables + Secrets），仓库里没有任何明文密钥。
+#      ⚠️ job 上必须声明 `environment: PROD`，否则 Environment 下的 vars/secrets 都取不到，
+#      会静默变成空字符串，表现为登录 ACR 失败或推到错误的地址。
 
 on:
-  push:
-    branches: [ "main" ]
-    tags:
-      - 'v*.*.*'  # 匹配版本标签，如 v1.0.0, v1.2.3 等
-  workflow_dispatch:  # 允许手动触发
+  # 仅手动触发。
+  # 需要某个版本时: Actions → 本 workflow → Run workflow，
+  # 或先在 tag 页面选择 tag 再 Run workflow（那样会自动带上版本号标签）。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本号（如 1.2.3 或 v1.2.3；留空 = 只推 sha-<commit>）'
+        required: false
+        default: ''
+      push_latest:
+        description: '同时更新 latest 标签（私有仓库，默认勾选；不勾则只推版本/sha 标签）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# 避免两次手动运行同时覆盖 ACR 上的同一个标签
+concurrency:
+  group: docker-publish-acr
+  cancel-in-progress: false
+
+env:
+  # 镜像名与拆分前一致（ACR 里就是 <namespace>/x.certbot）
+  IMAGE_NAME: x.certbot
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: PROD  # 指定使用PROD环境
-    
+    # ⚠️ 硬性要求: 下面的 ALIYUN_CR_* 都配置在 Environment `PROD` 下。
+    environment: PROD
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 0  # 获取完整历史以便正确提取版本信息
-    
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Extract version
-      id: version
-      run: |
-        # 如果是标签触发，则使用标签作为版本号
-        if [[ $GITHUB_REF == refs/tags/v* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-        else
-          # 非标签触发时，仅用于构建参数
-          VERSION="latest"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-        fi
-        echo "Version: $VERSION"
-    
-    - name: Extract Tags
-      id: tags
-      run: |
-        # 获取仓库信息
-        DOCKER_HUB_REPO="${{ vars.DOCKERHUB_USERNAME }}/x.certbot"
-        ALIYUN_REPO="${{ secrets.ALIYUN_CR_URL }}/${{ vars.ALIYUN_CR_NAMESPACE }}/x.certbot"
-        
-        # 构建基本标签 (always include latest)
-        ALIYUN_TAGS="$ALIYUN_REPO:latest"
-        DOCKER_HUB_TAGS="$DOCKER_HUB_REPO:latest"
-        
-        # 如果是版本发布，添加版本标签
-        if [[ "${{ github.ref_type }}" == "tag" ]]; then
-          ALIYUN_TAGS="$ALIYUN_TAGS,$ALIYUN_REPO:${{ env.VERSION }}"
-          DOCKER_HUB_TAGS="$DOCKER_HUB_TAGS,$DOCKER_HUB_REPO:${{ env.VERSION }}"
-          echo "构建版本标签: ${{ env.VERSION }}"
-        fi
-        
-        # 输出标签到环境变量和输出
-        echo "ALIYUN_TAGS=$ALIYUN_TAGS" >> $GITHUB_ENV
-        echo "DOCKER_HUB_TAGS=$DOCKER_HUB_TAGS" >> $GITHUB_ENV
-        echo "aliyun_tags=$ALIYUN_TAGS" >> $GITHUB_OUTPUT
-        echo "docker_hub_tags=$DOCKER_HUB_TAGS" >> $GITHUB_OUTPUT
-        
-        echo "阿里云标签: $ALIYUN_TAGS"
-        echo "Docker Hub标签: $DOCKER_HUB_TAGS"
-    
-    # 第一步：登录并推送到阿里云容器仓库
-    - name: Login to Aliyun Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.ALIYUN_CR_URL }}
-        username: ${{ secrets.ALIYUN_CR_USERNAME }}
-        password: ${{ secrets.ALIYUN_CR_PASSWORD }}
-    
-    - name: Build and push to Aliyun CR
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ env.ALIYUN_TAGS }}
-        build-args: |
-          VERSION=${{ env.VERSION }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    # 第二步：登录并推送到Docker Hub
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ vars.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-    
-    - name: Push to Docker Hub
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ env.DOCKER_HUB_TAGS }}
-        build-args: |
-          VERSION=${{ env.VERSION }}
-        cache-from: type=gha 
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # 获取完整历史与 tag，便于从 tag 推导版本信息
+
+      - name: 安装 QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 安装 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 推导版本与标签
+        id: tags
+        # 用户输入一律通过 env 传入，不要直接插值进 shell 命令（避免命令注入）
+        env:
+          ALIYUN_CR_URL: ${{ secrets.ALIYUN_CR_URL }}
+          ALIYUN_CR_NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUSH_LATEST: ${{ inputs.push_latest }}
+        run: |
+          set -euo pipefail
+
+          REPO="${ALIYUN_CR_URL}/${ALIYUN_CR_NAMESPACE}/${IMAGE_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          # ---- 版本号推导（沿用原 workflow 的规则）----
+          #   1) 从某个 tag 上手动跑 -> 用 tag 名去掉前导 v（如 v1.2.3 -> 1.2.3）
+          #   2) 否则用 workflow_dispatch 的 version 输入（同样去掉前导 v）
+          #   3) 都没有 -> 没有版本标签，只推不可变的 sha-<commit>
+          VERSION=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          fi
+
+          # Docker 标签只允许 [A-Za-z0-9_.-]，长度不超过 128
+          if [ -n "${VERSION}" ] && ! [[ "${VERSION}" =~ ^[A-Za-z0-9_.-]{1,128}$ ]]; then
+            echo "::error::非法的版本号 '${VERSION}'（Docker 标签只允许 A-Za-z0-9_.-，且不超过 128 字符）"
+            exit 1
+          fi
+
+          # ---- 是否打 latest ----
+          #   tag 触发 = 正式发布，latest 必须跟随；
+          #   手动触发看 push_latest 输入（默认 true，与拆分前「每次都推 latest」一致）
+          PUSH_LATEST="false"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] || [ "${INPUT_PUSH_LATEST:-false}" = "true" ]; then
+            PUSH_LATEST="true"
+          fi
+
+          TAGS="${REPO}:sha-${SHORT_SHA}"
+          if [ -n "${VERSION}" ]; then
+            TAGS="${TAGS},${REPO}:${VERSION}"
+          fi
+          if [ "${PUSH_LATEST}" = "true" ]; then
+            TAGS="${TAGS},${REPO}:latest"
+          fi
+
+          # Dockerfile 的 LABEL org.opencontainers.image.version 用这个值；
+          # 没有版本号时沿用拆分前的 'latest' 兜底
+          BUILD_VERSION="${VERSION:-latest}"
+
+          {
+            echo "VERSION=${VERSION}"
+            echo "BUILD_VERSION=${BUILD_VERSION}"
+            echo "TAGS=${TAGS}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "version=${VERSION}"
+            echo "tags=${TAGS}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "版本: ${VERSION:-（无，仅 sha 标签）}"
+          echo "推送标签: ${TAGS}"
+
+      - name: 登录阿里云容器镜像服务 (ACR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_CR_URL }}
+          username: ${{ secrets.ALIYUN_CR_USERNAME }}
+          password: ${{ secrets.ALIYUN_CR_PASSWORD }}
+
+      - name: 构建并推送到 ACR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.TAGS }}
+          build-args: |
+            VERSION=${{ env.BUILD_VERSION }}
+          cache-from: type=gha,scope=acr
+          cache-to: type=gha,mode=max,scope=acr
