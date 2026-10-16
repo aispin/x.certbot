@@ -135,17 +135,26 @@ function expandEnv(value) {
 
 /**
  * ACME 账户邮箱。
- * 邮箱不是机密，所以【只从 deploy/domains.yml 读】（defaults.email 或某个域名的 email），
- * 不再从环境变量 / GitHub Secrets 读。
- * 空值或占位值直接报错: 与其静默用空邮箱注册 ACME 账户，不如让用户在第一眼就看到要改哪里。
+ *
+ * 取值优先级：配置文件里的 defaults.email（或该域名的 email）→ 环境变量 ACME_EMAIL。
+ *
+ * 支持环境变量是为了不让邮箱出现在公开仓库里：工作流把它作为 Environment
+ * Variable 注入，本地 `export ACME_EMAIL=...` 即可。两者都不给时直接报错 ——
+ * 与其静默用空邮箱注册 ACME 账户，不如让人第一眼就知道要改哪里。
  */
 function resolveEmail(acme, ctx) {
-  const value = expandEnv(String(acme.email || '')).trim();
-  if (!value || value === EMAIL_PLACEHOLDER) {
+  const fromConfig = expandEnv(String(acme.email || '')).trim();
+  const value =
+    fromConfig && fromConfig !== EMAIL_PLACEHOLDER
+      ? fromConfig
+      : String(process.env.ACME_EMAIL || '').trim();
+
+  if (!value) {
     fail(
-      `${ctx}.email 还没有填写（当前值: ${value ? JSON.stringify(value) : '<空>'}）。\n` +
-      '  邮箱不是机密，请直接在 deploy/domains.yml 里把 defaults.email（或该域名的 email）\n' +
-      "  改成你自己的邮箱，例如 ops@example.com。Let's Encrypt 会用它发送证书到期提醒。"
+      `${ctx}.email 没有值。两种给法任选其一：\n` +
+      '  1) 环境变量 ACME_EMAIL（推荐：邮箱不会进仓库。工作流派 Environment Variable，本地 export）\n' +
+      "  2) deploy/domains.yml 的 defaults.email（或该域名的 email），例如 ops@example.com\n" +
+      "  Let's Encrypt 会用它发送证书到期提醒。"
     );
   }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {

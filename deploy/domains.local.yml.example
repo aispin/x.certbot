@@ -1,0 +1,45 @@
+# 本地个人配置示例 —— 这个文件【不进仓库】，见 .gitignore
+#
+# 什么时候需要它：你不想让域名清单 / CloudBase 环境 ID / ACME 邮箱出现在公开仓库里。
+# 只想藏邮箱的话不必用它：留空 deploy/domains.yml 的 defaults.email，
+# 本地 `export ACME_EMAIL=you@example.com` 就够了。
+#
+# 用法:
+#   cp deploy/domains.local.yml.example deploy/domains.local.yml
+#   # 编辑它，然后本地跑时显式指定：
+#   node scripts/ci/lib/config.cjs --config deploy/domains.local.yml --out plan.json
+#
+# 注意：GitHub Actions 用的是仓库 Variable DOMAINS_CONFIG 指向的文件，
+#       本文件只影响本机运行。
+
+version: 1
+
+defaults:
+  server: letsencrypt
+  key_length: 2048
+  dns_propagation_seconds: 60
+  # 也可以留空并改用环境变量 ACME_EMAIL
+  email: ""
+
+domains:
+  - name: your.domain
+    dns_provider: aliyun
+    wildcard: true
+    sync:
+      cloudbase:
+        enabled: false
+        env_id: ""
+        domains: []
+        routes_apply: false
+        routes: []
+        delete_old_cert: false
+      aliyun:
+        cas:
+          enabled: true
+          name_prefix: "LE"
+        cdn:
+          enabled: false
+          domains: []
+        dcdn:
+          enabled: false
+          domains: []

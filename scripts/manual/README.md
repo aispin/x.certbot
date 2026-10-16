@@ -31,7 +31,8 @@ acme.sh --issue（阿里云 DNS-01）
 
 | 变量 | 说明 |
 | --- | --- |
-| `CERT_DOMAIN` | 域名，默认写成 `gitalk.xsin.work`，换成你自己的 |
+| `CERT_DOMAIN` | 域名，**必填**（不再有默认值） |
+| `ACME_EMAIL` | ACME 账户邮箱，**必填**（不给会在解析配置时直接报错） |
 | `ALIYUN_SECRET_ID_DNS` / `ALIYUN_SECRET_KEY_DNS` | 阿里云 RAM 凭据，DNS-01 用（需要 `alidns:DescribeDomainRecords` / `AddDomainRecord` / `DeleteDomainRecord`） |
 | `CLOUDBASE_SECRET_ID` / `CLOUDBASE_SECRET_KEY` | 腾讯云子账号凭据（需要 `QcloudSSLFullAccess`，以及 CloudBase 的 `QcloudAccessForTCBRole`） |
 

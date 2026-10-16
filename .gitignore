@@ -1,3 +1,6 @@
 .DS_Store
 .vscode
 .env
+
+# 本地个人配置（域名清单 / 环境 ID / 邮箱），不进仓库
+deploy/domains.local.yml

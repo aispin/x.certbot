@@ -79,6 +79,11 @@
 
 1. **建好 Environment `PROD`**，在里面配置四个变量/密钥（见 [第 4 节](#4-需要配置的凭据environment-prod)）
    —— 名字必须完全一致，ID 走 Variables、Key 走 Secrets
+> **ACME 邮箱怎么给**：优先读环境变量 **`ACME_EMAIL`**（工作流从 Environment
+> Variable 注入，本地 `export ACME_EMAIL=...`），也接受 `deploy/domains.yml` 的
+> `defaults.email`。之所以不写在提交进仓库的配置里，是因为仓库通常是公开的。
+> 两者都不给时，「解析配置」这一步会直接报错并说明。
+
 2. **编辑 `deploy/domains.yml`**：把 `defaults.email` 的占位邮箱改成你自己的，
    写上你的域名与要同步的目标（见 [第 5 节](#5-声明式配置-deploydomainsyml)）
 3. **先干跑一次**：Actions → Certificate Sync → Run workflow → 勾选 `dry_run`

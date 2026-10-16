@@ -61,7 +61,9 @@ env:
   ACME_SH_REF: ${{ vars.ACME_SH_REF || 'master' }}
   # CAS 证书地域（cn-hangzhou / ap-southeast-1）
   ALIYUN_CERT_REGION: ${{ vars.ALIYUN_CERT_REGION || 'cn-hangzhou' }}
-  # ACME 账户邮箱不在这里读（它不是机密）：见 deploy/domains.yml 的 defaults.email。
+  # ACME 账户邮箱：作为 Environment Variable 注入，避免邮箱出现在公开仓库里。
+  # 也可以写进 deploy/domains.yml 的 defaults.email（只在本机跑时更方便）。
+  ACME_EMAIL: ${{ vars.ACME_EMAIL }}
 
   # ---- 凭据（全部来自 Environment `PROD`）----
   # 约定: ID 走 Variables（${{ vars.* }}），Key 走 Secrets（${{ secrets.* }}）。
