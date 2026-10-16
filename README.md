@@ -32,7 +32,7 @@
   - 可配置完成后自动关闭或保持运行
 - **免 Docker 的 GitHub Actions 路线**：直接用 `acme.sh` + GitHub Actions 调度，
   证书续期后自动同步到腾讯云 CloudBase 与阿里云 CAS / CDN / DCDN，无需维护任何机器
-  （与下面「在容器里跑」的 GitHub 用法是两条独立路线，见 [GitHub Actions 自动化（免 Docker）](#github-actions-自动化免-docker)）
+  （与下面「在容器里跑」的 GitHub 用法是两条独立路线，见 [GitHub Actions 自动化（免 Docker）](#方案三--github-actions--acmesh免-docker)）
 - **自动化功能**：
   - 使用 cron 任务自动定期续期证书
   - 支持通过 Webhook 通知证书更新状态
@@ -46,7 +46,23 @@
   - 格式化输出，使信息更加清晰
   - 可通过环境变量控制颜色和 emoji 的显示
 
-## 快速开始
+## 方案一览：选一种即可
+
+本项目的证书自动化有三条路，**按你的运维条件选一条**，不需要都看：
+
+| | 方案 | 运行在哪 | 适合 | 证书落地方式 |
+| --- | --- | --- | --- | --- |
+| **方案一** | Docker 容器 | 你自己的机器 / 服务器 | 有常驻机器，想让容器自己按 cron 续期 | 挂载目录，再用自定义钩子分发 |
+| **方案二** | Docker 容器 + GitHub Actions | GitHub 托管的 runner | 不想维护机器，但仍想用容器里现成的 certbot 与钩子 | 工作流里再部署到服务器 |
+| **方案三** | **GitHub Actions + acme.sh**（免 Docker） | GitHub 托管的 runner | 证书只给云服务用（CloudBase / 阿里云 CDN、DCDN、证书库） | 工作流直接同步到云平台 |
+
+- **方案一**见下面的[快速开始](#方案一--docker-容器自备机器)
+- **方案二**见 [使用指南 · 场景三](docs/04-usage-guide.md#4-场景三github-actions-自动化)
+- **方案三**见 [方案三](#方案三--github-actions--acmesh免-docker)，完整配置与排错见 [docs/07](docs/07-github-actions-cert-sync.md)
+
+> 三者互不依赖：方案三不读方案一的 `.env`，也不碰容器。
+
+## 方案一 · Docker 容器（自备机器）
 
 > **详细使用指南**：请参阅 [使用指南](docs/04-usage-guide.md) 获取完整的使用说明、配置选项和故障排除信息。
 
@@ -129,7 +145,7 @@ DEBUG=true
 
 这些配置可以添加到 `.env` 文件中，或者作为 Docker 运行时的环境变量传入。
 
-## GitHub Actions 自动化（免 Docker）
+## 方案三 · GitHub Actions + acme.sh（免 Docker）
 
 上面「快速开始」是在本机或 CI 里跑 Docker 容器；这一条是**另一条独立路线**：直接用 GitHub
 Actions 调度 `acme.sh`，不需要 Docker、不需要常驻机器，证书到期前自动续期并同步到你用的云平台。
