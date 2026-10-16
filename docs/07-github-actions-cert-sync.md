@@ -259,7 +259,7 @@ ACME 账户邮箱**不是机密**，写在 `deploy/domains.yml` 的 `defaults.em
 | `ALIYUN_CERT_ACCESS_KEY_SECRET` | `ALIYUN_SECRET_KEY_CERT`（可选） | Secrets |
 | `TENCENTCLOUD_SECRETID` / `TENCENTCLOUD_SECRET_ID` / `TENCENT_DNS_SECRET_ID` | `CLOUDBASE_SECRET_ID` | Variables |
 | `TENCENTCLOUD_SECRETKEY` / `TENCENTCLOUD_SECRET_KEY` / `TENCENT_DNS_SECRET_KEY` | `CLOUDBASE_SECRET_KEY` | Secrets |
-| `ACME_EMAIL`（Secret） | 删除，改在 `deploy/domains.yml` 的 `defaults.email` | 配置文件 |
+| `ACME_EMAIL`（Secret） | 改为 **Variable** `ACME_EMAIL`，工作流作为环境变量注入 | Environment Variable |
 | `CLOUDBASE_ENV_ID`（Secret） | `CLOUDBASE_ENV_ID`（Variable，非机密） | Variables |
 
 ---
@@ -600,7 +600,7 @@ bash scripts/ci/selftest/run.sh
 - `deploy/domains.yml` 与 workflow 的 YAML 可解析性
 - **阿里云签名实现与官方文档给出的向量逐字节一致**
 - **凭据名映射**：workflow 里必须存在 `environment: PROD`、
-  四个配置项必须分别走 `vars.*` / `secrets.*`，且旧凭据名（含 `ACME_EMAIL`）不允许残留
+  四个凭据必须分别走 `vars.*` / `secrets.*`，且旧的阿里云/腾讯云凭据名不允许残留
 - 邮箱只从配置文件读：没填 / 保留占位值时必须报错
 - 端到端：`run-all.sh` → `issue-cert.sh`（假 acme.sh）→ `sync-cert.sh` → 各目标 → 假云端
 - 幂等：跑第二遍不重复上传证书、不重复重绑域名

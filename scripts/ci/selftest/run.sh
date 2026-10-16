@@ -136,6 +136,8 @@ export ALIYUN_SECRET_ID_DNS="testid"
 export ALIYUN_SECRET_KEY_DNS="testsecret"
 export CLOUDBASE_SECRET_ID="fake-secret-id"
 export CLOUDBASE_SECRET_KEY="fake-secret-key"
+# ACME 邮箱：与工作流一致，走环境变量（不写进配置文件，避免邮箱进公开仓库）
+export ACME_EMAIL="selftest@example.com"
 
 # 演练用配置
 cat > "$WORK/domains.yml" <<'YAML'
@@ -248,9 +250,18 @@ case "$IDN_NAME" in
     *) bad "中文域名 punycode 转换" "得到 $IDN_NAME" ;;
 esac
 
-# ACME 邮箱: 只从配置文件读（不再有 ACME_EMAIL Secret）
-assert_eq "计划里的 ACME 邮箱来自 deploy/domains.yml" "selftest@example.com" \
+# ACME 邮箱优先级：配置文件 > 环境变量 ACME_EMAIL > 报错
+assert_eq "配置里的邮箱优先于环境变量" "selftest@example.com" \
     "$("$NODE_BIN" -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(p.domains[0].email)' "$PLAN")"
+
+cat > "$WORK/env-email.yml" <<'YAML'
+version: 1
+domains:
+  - name: example.com
+    dns_provider: aliyun
+YAML
+assert_eq "配置留空时用环境变量 ACME_EMAIL" "env-only@example.com" \
+    "$(ACME_EMAIL=env-only@example.com "$NODE_BIN" "$CI_DIR/lib/config.cjs" --config "$WORK/env-email.yml" 2>/dev/null | "$NODE_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{const p=JSON.parse(s);process.stdout.write(p.domains[0].email)})')"
 
 cat > "$WORK/no-email.yml" <<'YAML'
 version: 1
@@ -258,11 +269,11 @@ domains:
   - name: example.com
     dns_provider: aliyun
 YAML
-"$NODE_BIN" "$CI_DIR/lib/config.cjs" --config "$WORK/no-email.yml" >/dev/null 2>"$WORK/no-email.err"
+env -u ACME_EMAIL "$NODE_BIN" "$CI_DIR/lib/config.cjs" --config "$WORK/no-email.yml" >/dev/null 2>"$WORK/no-email.err"
 assert_ne0 "没填邮箱时按预期失败" $?
-grep -q 'email 还没有填写' "$WORK/no-email.err" \
-    && ok "错误信息指出要改 deploy/domains.yml 的 email" \
-    || bad "错误信息指出要改 deploy/domains.yml 的 email" "$(cat "$WORK/no-email.err")"
+grep -q 'ACME_EMAIL' "$WORK/no-email.err" \
+    && ok "错误信息指出可以用 ACME_EMAIL" \
+    || bad "错误信息指出可以用 ACME_EMAIL" "$(cat "$WORK/no-email.err")"
 
 # 负例：启用 cdn 但没启用 cas
 cat > "$WORK/bad.yml" <<'YAML'
@@ -302,7 +313,7 @@ bash "$CI_DIR/preflight.sh" --plan "$PLAN" >/dev/null 2>&1
 assert_zero "凭据齐全时预检通过" $?
 
 ( unset ALIYUN_SECRET_ID_DNS ALIYUN_SECRET_KEY_DNS ALIYUN_SECRET_ID_CERT ALIYUN_SECRET_KEY_CERT
-  bash "$CI_DIR/preflight.sh" --plan "$PLAN" ) >/dev/null 2>"$WORK/preflight.err"
+  bash "$CI_DIR/preflight.sh" --plan "$PLAN" ) >"$WORK/preflight.err" 2>&1
 assert_ne0 "缺阿里云凭据时预检失败" $?
 grep -q 'ALIYUN_SECRET_ID_DNS' "$WORK/preflight.err" && ok "预检信息列出缺失的变量名" || bad "预检信息列出缺失的变量名"
 
@@ -332,13 +343,13 @@ do
     fi
 done
 
-# 旧凭据名（含 ACME_EMAIL）不允许再出现在 workflow / 脚本里
-LEGACY_RE='ALIYUN_DNS_ACCESS_KEY_ID|ALIYUN_DNS_ACCESS_KEY_SECRET|ALIYUN_ACCESS_KEY_ID|ALIYUN_ACCESS_KEY_SECRET|ALIYUN_CERT_ACCESS_KEY_ID|ALIYUN_CERT_ACCESS_KEY_SECRET|TENCENTCLOUD_SECRETID|TENCENTCLOUD_SECRETKEY|TENCENTCLOUD_SECRET_ID|TENCENTCLOUD_SECRET_KEY|TENCENT_DNS_SECRET_ID|TENCENT_DNS_SECRET_KEY|ACME_EMAIL'
+# 旧的阿里云/腾讯云凭据名不允许再出现（ACME_EMAIL 现在是合法名字，不在此列）
+LEGACY_RE='ALIYUN_DNS_ACCESS_KEY_ID|ALIYUN_DNS_ACCESS_KEY_SECRET|ALIYUN_ACCESS_KEY_ID|ALIYUN_ACCESS_KEY_SECRET|ALIYUN_CERT_ACCESS_KEY_ID|ALIYUN_CERT_ACCESS_KEY_SECRET|TENCENTCLOUD_SECRETID|TENCENTCLOUD_SECRETKEY|TENCENTCLOUD_SECRET_ID|TENCENTCLOUD_SECRET_KEY|TENCENT_DNS_SECRET_ID|TENCENT_DNS_SECRET_KEY'
 LEGACY_HITS="$(grep -Ern "$LEGACY_RE" "$WF" "$CI_DIR"/*.sh "$CI_DIR"/lib/*.cjs "$CI_DIR"/targets/*.sh "$CI_DIR"/selftest/stubs/* 2>/dev/null | head -5 || true)"
 if [ -z "$LEGACY_HITS" ]; then
-    ok "旧凭据名已全部清除（只剩四个新名字）"
+    ok "旧凭据名已全部清除"
 else
-    bad "旧凭据名已全部清除（只剩四个新名字）" "$LEGACY_HITS"
+    bad "旧凭据名已全部清除" "$LEGACY_HITS"
 fi
 
 # ---------------------------------------------------------------------------
@@ -396,7 +407,7 @@ cat > "$WORK/cdn-only.json" <<'JSON'
 JSON
 ( unset ALIYUN_CAS_CERT_ID
   TARGET=aliyun.cdn TARGET_CONFIG="$WORK/cdn-only.json" CERT_DOMAIN=example.com \
-  bash "$CI_DIR/targets/aliyun-cdn.sh" ) >/dev/null 2>"$WORK/cdn.err"
+  bash "$CI_DIR/targets/aliyun-cdn.sh" ) >"$WORK/cdn.err" 2>&1
 assert_ne0 "CDN 目标缺少 ALIYUN_CAS_CERT_ID 时失败" $?
 grep -q 'aliyun.cas' "$WORK/cdn.err" && ok "错误信息指向缺失的上游目标" || bad "错误信息指向缺失的上游目标"
 
