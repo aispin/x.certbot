@@ -6,10 +6,10 @@
 # 重新指向新证书（tcb domains edit --certid）。
 #
 # 设计为 acme.sh 的 --reloadcmd 钩子：
-#   acme.sh --install-cert -d gitalk.xsin.work \
-#     --fullchain-file /etc/ssl/gitalk.xsin.work/fullchain.pem \
-#     --key-file       /etc/ssl/gitalk.xsin.work/privkey.pem \
-#     --reloadcmd      "/opt/gitalk/deploy-cert-to-cloudbase.sh >>/var/log/gitalk-cert.log 2>&1"
+#   acme.sh --install-cert -d your.domain \
+#     --fullchain-file /etc/ssl/your.domain/fullchain.pem \
+#     --key-file       /etc/ssl/your.domain/privkey.pem \
+#     --reloadcmd      "/opt/cert/deploy-cert-to-cloudbase.sh >>/var/log/cert-sync.log 2>&1"
 #
 # 也可以在证书换新后手工执行 —— 脚本是幂等的：如果云端已经绑定的是同一张证书，就跳过重绑。
 #
@@ -21,7 +21,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # 配置（都可用环境变量覆盖）
 # ---------------------------------------------------------------------------
-CERT_DOMAIN="${CERT_DOMAIN:-gitalk.xsin.work}"
+CERT_DOMAIN="${CERT_DOMAIN:-}"
+[ -n "$CERT_DOMAIN" ] || { echo "CERT_DOMAIN is required: export CERT_DOMAIN=your.domain" >&2; exit 1; }
 
 # 证书文件：优先用 --install-cert 复制出来的稳定路径；
 # 找不到时回退到 acme.sh 在 reloadcmd 环境里 export 的 CERT_FULLCHAIN_PATH / CERT_KEY_PATH。

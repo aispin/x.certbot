@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# issue-and-install-gitalk.sh
+# issue-and-install.sh
 #
-# 一次性执行：用 acme.sh + 阿里云 DNS-01 签发 gitalk.xsin.work 的 Let's Encrypt 证书，
+# 一次性执行：用 acme.sh + 阿里云 DNS-01 签发指定域名的 Let's Encrypt 证书，
 # 复制到稳定路径，并把「上传腾讯云 SSL + 重绑 CloudBase 域名」挂成 --reloadcmd。
 #
 # 之后每次续期（cron 每天 4 次触发 acme.sh --cron）都会自动重放这个钩子。
@@ -13,11 +13,12 @@
 #   export CLOUDBASE_ENV_ID="env-xxxx"
 #   export TCB_SECRET_ID="AKID..."      # 腾讯云子账号
 #   export TCB_SECRET_KEY="..."
-#   bash docs/cert-automation/issue-and-install-gitalk.sh
+#   bash scripts/manual/issue-and-install.sh
 #
 set -euo pipefail
 
-CERT_DOMAIN="${CERT_DOMAIN:-gitalk.xsin.work}"
+CERT_DOMAIN="${CERT_DOMAIN:-}"
+[ -n "$CERT_DOMAIN" ] || { echo "CERT_DOMAIN is required: export CERT_DOMAIN=your.domain" >&2; exit 1; }
 ACME_SERVER="${ACME_SERVER:-letsencrypt}"     # 必须显式指定：acme.sh 默认 CA 是 ZeroSSL
 KEY_LENGTH="${KEY_LENGTH:-2048}"              # RSA 2048；首次落地不要用默认的 ec-256，见 README §2.3
 
@@ -31,7 +32,7 @@ CERT_PRIVKEY="$SSL_DIR/privkey.pem"
 # 钩子脚本默认取本脚本同目录下的 deploy-cert-to-cloudbase.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="${HOOK:-$SCRIPT_DIR/deploy-cert-to-cloudbase.sh}"
-LOG_FILE="${LOG_FILE:-/var/log/gitalk-cert.log}"
+LOG_FILE="${LOG_FILE:-/var/log/cert-sync.log}"
 
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
