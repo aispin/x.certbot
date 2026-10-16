@@ -24,6 +24,9 @@ name: Docker Publish → Docker Hub (公开镜像)
 
 on:
   push:
+    # 推送 main 就自动构建公开镜像，但只打 sha-<commit>：
+    # `latest` 与版本号只在推 tag 时才动，见下面「是否打 latest」的判定。
+    branches: [main]
     tags:
       - 'v*.*.*'  # 匹配版本标签，如 v1.0.0, v1.2.3 等（与 docs/05 §7.2 的发布流程一致）
   workflow_dispatch:
