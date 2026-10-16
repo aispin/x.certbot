@@ -30,6 +30,9 @@
   - 详细的输出日志
   - 多种运行模式
   - 可配置完成后自动关闭或保持运行
+- **免 Docker 的 GitHub Actions 路线**：直接用 `acme.sh` + GitHub Actions 调度，
+  证书续期后自动同步到腾讯云 CloudBase 与阿里云 CAS / CDN / DCDN，无需维护任何机器
+  （与下面「在容器里跑」的 GitHub 用法是两条独立路线，见 [GitHub Actions 自动化（免 Docker）](#github-actions-自动化免-docker)）
 - **自动化功能**：
   - 使用 cron 任务自动定期续期证书
   - 支持通过 Webhook 通知证书更新状态
@@ -125,6 +128,117 @@ DEBUG=true
 ```
 
 这些配置可以添加到 `.env` 文件中，或者作为 Docker 运行时的环境变量传入。
+
+## GitHub Actions 自动化（免 Docker）
+
+上面「快速开始」是在本机或 CI 里跑 Docker 容器；这一条是**另一条独立路线**：直接用 GitHub
+Actions 调度 `acme.sh`，不需要 Docker、不需要常驻机器，证书到期前自动续期并同步到你用的云平台。
+
+| | Docker 方案 | 本方案 |
+| --- | --- | --- |
+| 运行位置 | 本机 / 服务器 / CI 里的容器 | GitHub Actions（托管 runner） |
+| ACME 客户端 | certbot | acme.sh（阿里云 DNS 插件为官方内置） |
+| 续期触发 | 容器内 cron | GitHub Actions `schedule` |
+| 证书落地 | 挂载目录 + 自定义钩子 | 直接同步到腾讯云 CloudBase / 阿里云 CAS、CDN、DCDN |
+| 适合 | 跑在自有服务器上 | 完全不维护机器，证书只给云服务用 |
+
+### 快速开始
+
+1. **建 Environment 与凭据**
+
+   仓库 → `Settings` → `Environments` → 新建名为 **`PROD`** 的环境（名称必须一致），
+   然后在里面按下面的表格添加 **Variables** 和 **Secrets**。
+
+   > ⚠️ 工作流的 job 声明了 `environment: PROD`。若环境名不同，凭据会**静默取成空字符串**，
+   > 不会报「未配置」，而是直接调云 API 失败。
+
+2. **改 `deploy/domains.yml`**
+
+   至少填两处：`defaults.email`（ACME 账户邮箱）和 `domains:` 下你要管理的域名。
+   **邮箱是硬校验**：留着占位值工作流会在「解析配置」步骤直接失败（这是刻意的，
+   避免用空邮箱静默注册 ACME 账户）。
+
+3. **推送后手动跑一次**
+
+   `Actions` → `Cert Sync` → `Run workflow`。首次建议把 `dry_run` 打开，确认计划无误再关掉。
+
+### 需要的 Variables 与 Secrets
+
+在 **Environment `PROD`** 下创建。ID 放 Variables、Key 放 Secrets：
+
+| 名称 | 类型 | 用途 | 在哪创建 |
+| --- | --- | --- | --- |
+| `ALIYUN_SECRET_ID_DNS` | **Variable** | 阿里云 AccessKeyId，做 DNS-01 验证（增删 `_acme-challenge` TXT） | [RAM 控制台](https://ram.console.aliyun.com/users) 新建用户，勾选「OpenAPI 调用访问」 |
+| `ALIYUN_SECRET_KEY_DNS` | **Secret** | 与上面配对 | 同上，AccessKey 只显示一次 |
+| `ALIYUN_SECRET_ID_CERT` | **Variable** | 阿里云 AccessKeyId，用于证书同步（CAS / CDN / DCDN） | 同上（可与 DNS 用同一个用户，见下方权限表） |
+| `ALIYUN_SECRET_KEY_CERT` | **Secret** | 与上面配对 | 同上 |
+| `CLOUDBASE_ENV_ID` | **Variable** | 腾讯云 CloudBase 环境 ID | [CloudBase 控制台](https://console.cloud.tencent.com/tcb) 环境概览 |
+| `CLOUDBASE_SECRET_ID` | **Variable** | 腾讯云 SecretId | [CAM 控制台](https://console.cloud.tencent.com/cam) 新建**子账号** |
+| `CLOUDBASE_SECRET_KEY` | **Secret** | 腾讯云 SecretKey | 同上 |
+
+**腾讯云 DNS 验证**（域名 DNS 在 DNSPod 时）另需 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY`
+（前者 Variable、后者 Secret）。
+
+> `ALIYUN_SECRET_ID_CERT` / `ALIYUN_SECRET_KEY_CERT` 可以不配：不配时脚本回退用 `*_DNS` 那一对。
+> 但只给 DNS 权限的密钥调证书接口会被拒（`Forbidden` / `NoPermission`），所以**建议单独配**。
+
+### 需要的权限策略
+
+**阿里云**——DNS 验证那个用户：
+
+| 策略 / Action | 用途 |
+| --- | --- |
+| `AliyunDNSFullAccess`（或自定义 `alidns:DescribeDomainRecords` / `AddDomainRecord` / `DeleteDomainRecord`） | 增删 `_acme-challenge` TXT 记录 |
+
+证书同步那个用户：
+
+| 策略 | 用途 |
+| --- | --- |
+| `AliyunYundunCertReadOnlyAccess` | 读取证书列表（幂等判断用） |
+| `AliyunYundunCertFullAccess` | 上传证书到证书库（CAS） |
+| `AliyunCDNFullAccess` | 部署证书到 CDN |
+| `AliyunDCDNFullAccess` | 部署证书到全站加速 DCDN |
+
+> 只用 CAS（不上 CDN/DCDN）也建议保留前两个；后两个按你是否在用对应产品决定。
+
+**腾讯云**——子账号需要：
+
+| 策略 | 用途 |
+| --- | --- |
+| `QcloudSSLFullAccess` | 上传证书到腾讯云 SSL、查询证书列表 |
+| `QcloudAccessForTCBRole` | CloudBase 相关操作（官方为该产品提供的预设策略） |
+
+> ⚠️ **不要用主账号密钥**：腾讯云 API 密钥默认可操作账号下全部资源。
+> 另外**不要用 CloudBase 的「环境级 API Key」**——它没有追加 CAM 策略的通道，
+> 传证书会失败，必须用子账号的 SecretId/SecretKey。
+
+### 配置：`deploy/domains.yml`
+
+所有行为都由这一个文件驱动，**不含任何密钥**。常用字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `defaults.email` | ACME 账户邮箱，必填 |
+| `defaults.key_length` | 密钥长度，默认 2048（RSA） |
+| `domains[].name` / `dns_provider` / `wildcard` | 域名、DNS 服务商（`aliyun` / `tencentcloud`）、是否泛域名 |
+| `domains[].sync.cloudbase.enabled` / `env_id` / `domains` | 同步到 CloudBase：上传 SSL 并把证书重绑到这些域名 |
+| `domains[].sync.cloudbase.routes_apply` | 是否同时管理触发路径。**默认 false**，首次绑定请在控制台或 CLI 做，避免误改线上路由 |
+| `domains[].sync.aliyun.cas` | 上传到阿里云证书库 |
+| `domains[].sync.aliyun.cdn` / `.dcdn` | 部署到 CDN / DCDN（默认关闭） |
+| `domains[].sync.*.delete_old_cert` | 换新后是否删除旧证书，**默认保留**（避免误删仍被其他资源引用的证书） |
+
+### 验证与排错
+
+- **第一次运行请把 `dry_run` 打开**，它会打印将要执行的动作而不调用任何写接口
+- 运行结束后看 **Step Summary**：里面按域名列出每个同步目标的结果
+- 常见情况见 [docs/07-github-actions-cert-sync.md](docs/07-github-actions-cert-sync.md) 的排错章节，
+  包括：阿里云返回 `Forbidden`（权限不足，对照上面的策略表）、
+  CloudBase 报证书不存在、DNS 传播慢导致验证失败（调大 `dns_propagation_seconds`）
+- **证书换新后 CloudBase 不会自动生效**：它存的是证书 ID 指针，所以工作流每次都会显式重绑——
+  这也是本方案每次运行都做全量同步（而不只在续期时同步）的原因
+
+> ⚠️ 本工作流的设计与脚本**尚未对真实云 API 发起过请求**，验证方式是零凭据的 stub 端到端演练
+> （覆盖首次签发、幂等重跑、失败定位、dry-run）。第一次真实运行请当作首次验证。
 
 ## 文档
 
