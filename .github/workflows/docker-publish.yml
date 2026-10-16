@@ -141,6 +141,13 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # Aliyun ACR rejects the OCI attestation manifest buildx adds by
+          # default: `denied: unknown manifest class for
+          # application/vnd.oci.empty.v1+json`. The push fails outright, which
+          # is why this workflow's last automatic run was red. Docker Hub
+          # accepts those manifests, so the provenance stays on there.
+          provenance: false
+          sbom: false
           tags: ${{ env.TAGS }}
           build-args: |
             VERSION=${{ env.BUILD_VERSION }}
