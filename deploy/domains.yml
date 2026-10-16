@@ -15,6 +15,11 @@
 #   ALIYUN_SECRET_KEY_DNS   (secrets)    阿里云 RAM AccessKeySecret
 #   CLOUDBASE_SECRET_ID     (variables)  腾讯云 SecretId，AKID 前缀
 #   CLOUDBASE_SECRET_KEY    (secrets)    腾讯云 SecretKey
+#
+# 证书同步用的阿里云密钥（可选，不配则回退用上面那对——但只给 DNS 权限的密钥
+# 调用 CAS/CDN 会被拒）:
+#   ALIYUN_SECRET_ID_CERT   (variables)  阿里云 RAM AccessKeyId
+#   ALIYUN_SECRET_KEY_CERT  (secrets)    阿里云 RAM AccessKeySecret
 
 version: 1
 
@@ -29,55 +34,68 @@ defaults:
   key_length: 2048
   # DNS TXT 记录写入后等待多少秒再做校验。阿里云/腾讯云 DNS 一般 60 秒足够。
   dns_propagation_seconds: 60
-
-  # ⚠️⚠️ 必填，请务必改掉这个占位值 ⚠️⚠️
-  # ACME 账户邮箱（Let's Encrypt 用它发送证书到期提醒）。
-  # 邮箱【不是机密】，所以刻意不从 Secrets 读，直接写在这里。
-  # 保持占位值 / 留空时，workflow 会在「解析配置并生成执行计划」这一步就报错并提示改这里，
-  # 不会带着空邮箱静默注册 ACME 账户。
+  # ACME 账户邮箱。邮箱【不是机密】，所以刻意不从 Secrets 读。
+  # 保持占位值 / 留空时，workflow 会在「解析配置并生成执行计划」这一步就报错并提示改这里。
   email: "badstyle@qq.com"
 
 # ---------------------------------------------------------------------------
-# 同步目标公共配置（可被单个域名覆盖）
+# 同步目标的全局默认值
 #
-# 只填你实际要用的目标；没配、或 enabled: false 的目标会被跳过，不会产生任何请求。
+# 只填你实际要用的目标；没配、或 enabled: false 的目标会被跳过，不产生任何请求。
 # ---------------------------------------------------------------------------
 sync:
-  # 腾讯云 CloudBase: 上传证书到腾讯云 SSL，再把自定义域名重绑到新证书。
-  # 前置条件（三条都满足再打开）:
-  #   1) Environment `PROD` 里已配置 CLOUDBASE_SECRET_ID / CLOUDBASE_SECRET_KEY（CAM 子账号）；
-  #   2) 下面或域名条目里填了真实的 env_id（形如 env-xxxxxxxx）；
-  #   3) 该域名【已经】在 CloudBase 里绑定过（首次绑定要手工跑一次 `tcb domains add`）。
+  # 腾讯云 CloudBase：上传证书到腾讯云 SSL，再把自定义域名重绑到新证书。
+  # 前置条件（三条都满足再打开）：
+  #   1) Environment `PROD` 里已配置 CLOUDBASE_SECRET_ID / CLOUDBASE_SECRET_KEY（CAM 子账号）
+  #   2) 下面或域名条目里填了真实的 env_id
+  #   3) 该域名【已经】在 CloudBase 里绑定过（首次绑定要手工跑一次 `tcb domains add`）
   cloudbase:
     enabled: false
-    # CloudBase 环境 ID，形如 env-xxxxxxxx。非敏感信息：可以直接写在这里，
-    # 也可以留空，改用 Environment `PROD` 下的 Variable CLOUDBASE_ENV_ID。
     env_id: ""
-    # 要重绑的自定义域名列表；留空表示使用本域名自身。
-    domains:
-    # 泛域名证书覆盖 gitalk.xsin.work 等所有子域
-    - name: xsin.work
-      dns_provider: aliyun
-      wildcard: true
-      sync:
-        cloudbase:
+    domains: []
+    routes_apply: false
+    routes: []
+    delete_old_cert: false
+  aliyun:
+    # 上传到阿里云证书库（CAS）
+    cas:
+      enabled: true
+      name_prefix: "LE"
+    # 部署到 CDN / DCDN，默认关闭；有对应产品时再打开并填 domains
+    cdn:
+      enabled: false
+      domains: []
+    dcdn:
+      enabled: false
+      domains: []
+
+# ---------------------------------------------------------------------------
+# 要管理的域名
+# ---------------------------------------------------------------------------
+domains:
+  # 泛域名证书：同时覆盖 xsin.work 与 *.xsin.work（含 gitalk.xsin.work）
+  - name: xsin.work
+    dns_provider: aliyun
+    wildcard: true
+    sync:
+      cloudbase:
+        enabled: true
+        env_id: "ai-matrix-sh01-d2ghj0buc22bd7e13"
+        # 要重绑的 CloudBase 自定义域名。注意证书是泛域名，但 CloudBase 是
+        # 按【具体主机名】绑定证书的，所以这里写实际绑过的那个主机。
+        domains:
+          - gitalk.xsin.work
+        # 首次绑定请在控制台或 CLI 完成；这里只负责证书换新后重绑，避免误改线上路由
+        routes_apply: false
+        routes: []
+        delete_old_cert: false
+      aliyun:
+        cas:
           enabled: true
-          env_id: "ai-matrix-sh01-d2ghj0buc22bd7e13"
-          domains:
-            - gitalk.xsin.work
-          # 首次绑定域名请在 CloudBase 控制台或 CLI 完成；
-          # 这里只负责证书换新后重绑，避免误改线上路由
-          routes_apply: false
-          routes: []
-          delete_old_cert: false
-        aliyun:
-          # 仅上传到证书库（CAS）。有 CDN/DCDN 域名时再打开对应开关并填 domains
-          cas:
-            enabled: true
-            name_prefix: "LE"
-          cdn:
-            enabled: false
-            domains: []
-          dcdn:
-            enabled: false
-            domains: []
+          name_prefix: "LE"
+        cdn:
+          enabled: false
+          domains: []
+        dcdn:
+          enabled: false
+          domains: []
