@@ -247,6 +247,8 @@ Actions 调度 `acme.sh`，不需要 Docker、不需要常驻机器，证书到�
 - [组件实现](docs/03-component-implementation.md)
 - [使用指南](docs/04-usage-guide.md)
 - [开发指南](docs/05-development-guide.md)
+- [中文域名支持](docs/06-chinese-domain-support.md)
+- [GitHub Actions 自动化（免 Docker）](docs/07-github-actions-cert-sync.md)：配置、权限与排错
 
 ## 许可证
 
