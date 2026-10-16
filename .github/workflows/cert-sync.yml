@@ -1,0 +1,217 @@
+name: Certificate Sync (ACME → CloudBase / Aliyun)
+
+# 用途: 用 acme.sh 集中申请/续期多个域名的 Let's Encrypt 证书，并在每次运行后把当前证书
+#       同步到腾讯云 CloudBase 和阿里云（数字证书管理服务 CAS / CDN / DCDN）。
+#
+# 设计要点:
+#   1. schedule 每天跑一次；acme.sh 自己判断是否到了续期窗口，没到期就跳过（不会重复签发）。
+#   2. 每次运行都会把「当前证书」重新同步一遍 —— 这样「上次同步失败」会在下次运行自动补上。
+#      各同步目标自身是幂等的，重复调用不会重复上传证书、也不会产生垃圾资源。
+#   3. 逐域名串行处理，单域名/单平台失败不影响其它域名，失败明细写到 Step Summary。
+#   4. 凭据全部来自 GitHub Environment `PROD`（Variables + Secrets），仓库里没有任何明文密钥。
+#      ⚠️ job 上必须声明 `environment: PROD`，否则 Environment 下的 vars/secrets 都取不到。
+#
+# 详细说明（需要配置哪些变量/密钥、去哪申请、最小权限、怎么演练）见
+#   docs/07-github-actions-cert-sync.md
+
+on:
+  schedule:
+    # 每天 03:17 UTC（北京时间 11:17）跑一次。
+    # 避开整点: GitHub 的定时任务在整点最拥挤，容易延迟甚至被丢弃。
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: '只处理指定域名（留空 = 全部；多个用逗号分隔）'
+        required: false
+        default: ''
+      mode:
+        description: '运行模式: full=签发+同步 / sync-only=只同步 / issue-only=只签发'
+        type: choice
+        options:
+          - full
+          - sync-only
+          - issue-only
+        default: full
+      targets:
+        description: '只跑这些同步目标（逗号分隔，如 cloudbase.domain,aliyun.cas；留空 = 全部）'
+        required: false
+        default: ''
+      force_renew:
+        description: '强制续期（演练用，会真的重新签发一张证书）'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'DRY-RUN: 只解析配置并打印计划，不调用任何云接口'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 避免两次运行同时改同一份 acme.sh 状态 / 同一个云资源
+concurrency:
+  group: cert-sync
+  cancel-in-progress: false
+
+env:
+  # ---- 配置文件位置（可用仓库 Variable DOMAINS_CONFIG 指向别的路径）----
+  DOMAINS_CONFIG: ${{ vars.DOMAINS_CONFIG || 'deploy/domains.yml' }}
+  # acme.sh 的 git ref，建议在生产里钉一个 tag；默认 master 跟随上游
+  ACME_SH_REF: ${{ vars.ACME_SH_REF || 'master' }}
+  # CAS 证书地域（cn-hangzhou / ap-southeast-1）
+  ALIYUN_CERT_REGION: ${{ vars.ALIYUN_CERT_REGION || 'cn-hangzhou' }}
+  # ACME 账户邮箱不在这里读（它不是机密）：见 deploy/domains.yml 的 defaults.email。
+
+  # ---- 凭据（全部来自 Environment `PROD`）----
+  # 约定: ID 走 Variables（${{ vars.* }}），Key 走 Secrets（${{ secrets.* }}）。
+  # 这四个名字必须与 Environment `PROD` 里实际配置的一致，见 docs/07-github-actions-cert-sync.md 第 4 节。
+  #
+  # 阿里云: 一对 RAM AccessKey（ID 前缀 LTAI）。
+  #   DNS-01 验证（acme.sh dns_ali）用 ALIYUN_SECRET_ID_DNS / ALIYUN_SECRET_KEY_DNS。
+  #   证书同步（CAS/CDN/DCDN）默认【复用同一对】；
+  #   如果这套 DNS 密钥调用 CAS/CDN/DCDN 报权限错误，再另建一个 RAM 用户并配置下面那对
+  #   ALIYUN_SECRET_ID_CERT / ALIYUN_SECRET_KEY_CERT（可选，不配就自动复用 *_DNS）。
+  ALIYUN_SECRET_ID_DNS: ${{ vars.ALIYUN_SECRET_ID_DNS }}
+  ALIYUN_SECRET_KEY_DNS: ${{ secrets.ALIYUN_SECRET_KEY_DNS }}
+  ALIYUN_SECRET_ID_CERT: ${{ vars.ALIYUN_SECRET_ID_CERT }}
+  ALIYUN_SECRET_KEY_CERT: ${{ secrets.ALIYUN_SECRET_KEY_CERT }}
+
+  # 腾讯云: 一对 CAM 子账号密钥（SecretId 前缀 AKID）。
+  #   CloudBase 证书同步（tcb login + ssl.UploadCertificate + domains edit）用它；
+  #   DNS-01 若用 DNSPod（acme.sh dns_tencent）也复用同一对。
+  CLOUDBASE_SECRET_ID: ${{ vars.CLOUDBASE_SECRET_ID }}
+  CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
+
+  # CloudBase 环境 ID（非敏感，也可以用 Variable 配置；或直接写在 deploy/domains.yml 的 env_id）
+  CLOUDBASE_ENV_ID: ${{ vars.CLOUDBASE_ENV_ID }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # ⚠️ 硬性要求: 上面的 vars/secrets 都配置在 Environment `PROD` 下。
+    #    不声明 environment 时 GitHub 取不到它们，会静默变成空字符串，
+    #    表现为「凭据预检失败」或登录到错误账号。
+    environment: PROD
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: 准备运行目录
+        run: |
+          set -euo pipefail
+          echo "RUN_DIR=${RUNNER_TEMP}/cert-sync" >> "$GITHUB_ENV"
+          echo "STATE_DIR=${HOME}/.x-certbot-state" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/cert-sync" "${HOME}/.x-certbot-state"
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装配置解析依赖 (js-yaml)
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund --prefix "${RUNNER_TEMP}/npm" js-yaml@4.1.0
+          echo "NODE_PATH=${RUNNER_TEMP}/npm/node_modules" >> "$GITHUB_ENV"
+
+      - name: 自检 - 阿里云签名实现是否与官方文档向量一致
+        run: node scripts/ci/lib/aliyun-api.cjs --selftest
+
+      - name: 解析配置并生成执行计划
+        id: plan
+        # 用户输入一律通过 env 传入，不要直接插值进 shell 命令（避免命令注入）
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/lib/config.cjs \
+            --config "$DOMAINS_CONFIG" \
+            --domain "${INPUT_DOMAIN:-}" \
+            --out "$RUN_DIR/plan.json"
+
+          echo "---- 计划概览 ----"
+          node scripts/ci/lib/config.cjs --config "$DOMAINS_CONFIG" --domain "${INPUT_DOMAIN:-}" --list
+
+          DOMAIN_COUNT="$(node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(String(plan.domains.length));
+          ' "$RUN_DIR/plan.json")"
+          echo "domain_count=$DOMAIN_COUNT" >> "$GITHUB_OUTPUT"
+
+          NEEDS_CLOUDBASE="$(node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const yes = plan.domains.some((d) => d.targets.some((t) => t.platform === "cloudbase"));
+            process.stdout.write(yes ? "true" : "false");
+          ' "$RUN_DIR/plan.json")"
+          echo "needs_cloudbase=$NEEDS_CLOUDBASE" >> "$GITHUB_OUTPUT"
+
+          if [ "$DOMAIN_COUNT" -eq 0 ]; then
+            echo "::error::配置里没有任何域名，请检查 $DOMAINS_CONFIG"
+            exit 1
+          fi
+
+      - name: 安装 CloudBase CLI（仅当计划里有 CloudBase 目标）
+        if: steps.plan.outputs.needs_cloudbase == 'true'
+        run: |
+          set -euo pipefail
+          # 版本与仓库既有实践保持一致（@cloudbase/cli v3.8.7 已验证过 domains/api/domains edit 的行为）
+          npm install -g @cloudbase/cli@3.8.7
+          tcb --version || true
+
+      - name: 恢复 acme.sh 状态缓存
+        uses: actions/cache@v4
+        with:
+          # 注意: ~/.acme.sh 里既有 ACME 账户密钥，也有已签发证书的私钥。
+          # GitHub 的 cache 是仓库级别的，能被同仓库的 workflow（包括 PR）恢复，
+          # 所以本仓库建议设为私有仓库。详见 docs/07-github-actions-cert-sync.md。
+          path: |
+            ~/.acme.sh
+            ~/.x-certbot-state
+          key: acme-${{ github.ref_name }}-${{ hashFiles('deploy/**') }}-${{ github.run_id }}
+          restore-keys: |
+            acme-${{ github.ref_name }}-${{ hashFiles('deploy/**') }}-
+            acme-${{ github.ref_name }}-
+            acme-
+
+      - name: 凭据预检
+        if: inputs.dry_run != true
+        run: bash scripts/ci/preflight.sh --plan "$RUN_DIR/plan.json"
+
+      - name: 申请/续期 + 同步
+        id: run
+        # 同样: 所有手动输入通过 env 传入
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+          INPUT_FORCE_RENEW: ${{ inputs.force_renew }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          ARGS=(--plan "$RUN_DIR/plan.json" --run-dir "$RUN_DIR" --mode "${INPUT_MODE:-full}")
+          if [ -n "${INPUT_TARGETS:-}" ]; then
+            ARGS+=(--only-targets "$INPUT_TARGETS")
+          fi
+          if [ "${INPUT_FORCE_RENEW:-false}" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          bash scripts/ci/run-all.sh "${ARGS[@]}"
+
+      - name: 结果汇总
+        if: always()
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          node scripts/ci/summary.cjs \
+            --plan "$RUN_DIR/plan.json" \
+            --run-dir "$RUN_DIR" \
+            --mode "${INPUT_MODE:-full}" || true
